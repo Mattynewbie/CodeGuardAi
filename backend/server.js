@@ -441,12 +441,26 @@ app.post('/api/projects/analyze', analysisRateLimit, upload.single('project'), a
 });
 
 if (hasClientBuild) {
-  app.use(express.static(clientDist));
+  app.use(
+    express.static(clientDist, {
+      setHeaders(response, filePath) {
+        if (filePath.endsWith('index.html')) {
+          response.setHeader('Cache-Control', 'no-store');
+          return;
+        }
+
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          response.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      },
+    }),
+  );
   app.get('*', (request, response, next) => {
     if (request.path.startsWith('/api/')) {
       next();
       return;
     }
+    response.setHeader('Cache-Control', 'no-store');
     response.sendFile(path.join(clientDist, 'index.html'));
   });
 }
