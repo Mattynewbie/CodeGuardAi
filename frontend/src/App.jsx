@@ -1705,7 +1705,7 @@ function viewTitle(view) {
 }
 
 function UserDashboard({ dashboard, loading, onNavigate, onOpenReport, onOpenReportById }) {
-  const metrics = useMemo(() => decorateMetrics(dashboard?.metrics || []), [dashboard]);
+  const metrics = useMemo(() => decorateMetrics(normalizeDashboardMetrics(dashboard)), [dashboard]);
 
   return (
     <div className="dashboard-page">
@@ -1731,6 +1731,27 @@ function UserDashboard({ dashboard, loading, onNavigate, onOpenReport, onOpenRep
       <DashboardFooter />
     </div>
   );
+}
+
+function normalizeDashboardMetrics(dashboard) {
+  const metrics = dashboard?.metrics || [];
+  const recentChecks = dashboard?.recentChecks || [];
+  const topMatches = dashboard?.topMatches || [];
+  const projectMetric = metrics.find((metric) => String(metric.label || '').toLowerCase().includes('project'));
+  const projectCount = Number(projectMetric?.value || 0);
+  const hasVisibleChecks = recentChecks.length > 0 || topMatches.length > 0;
+
+  return metrics.map((metric) => {
+    const label = String(metric.label || '').toLowerCase();
+    if (label.includes('completed') && label.includes('check') && projectCount === 0 && !hasVisibleChecks) {
+      return {
+        ...metric,
+        value: 0,
+      };
+    }
+
+    return metric;
+  });
 }
 
 function dashboardMetricTarget(label) {
