@@ -2101,23 +2101,9 @@ function UploadWorkspace({ compact = false, onAnalyzed }) {
       onAnalyzed(normalizeProjectFromApi(file, data), normalizeReportFromApi(file, data));
     } catch (error) {
       window.clearInterval(interval);
-      const report = makeLocalAnalysisReport(file);
       setProgress(100);
-      setStatus('done');
-      setMessage('Local analysis completed.');
-      onAnalyzed(
-        {
-          id: `local-${Date.now()}`,
-          title: file.name,
-          owner: 'Current User',
-          createdAt: new Date().toISOString().slice(0, 10),
-          files: 12,
-          highestSimilarity: report.similarityScore,
-          status: report.similarityScore >= 70 ? 'Flagged' : 'Cleared',
-          language: 'Mixed',
-        },
-        report,
-      );
+      setStatus('idle');
+      setMessage(error.message || 'Analysis failed. Please check the file and try again.');
     }
   }
 

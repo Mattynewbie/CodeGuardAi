@@ -96,19 +96,33 @@ async function walkExtractedDirectory(rootDir) {
 
 async function readSingleSourceFile(uploadedFile) {
   if (!isSupportedSourceFile(uploadedFile.originalname)) {
-    throw new Error('Unsupported source file.');
+    throw userUploadError('Unsupported source file.');
   }
 
   const stat = await fs.stat(uploadedFile.path);
   if (stat.size > config.maxExtractedFileBytes) {
-    throw new Error('Source file exceeds per-file analysis limit.');
+    throw userUploadError(
+      `Source file exceeds the per-file analysis limit of ${formatMb(config.maxExtractedFileBytes)} MB. Try uploading a smaller source file, or upload a project archive without bundled/minified build files.`,
+    );
   }
   if (stat.size > config.maxTotalExtractedBytes) {
-    throw new Error('Source file exceeds total analysis limit.');
+    throw userUploadError(
+      `Source file exceeds the total analysis limit of ${formatMb(config.maxTotalExtractedBytes)} MB.`,
+    );
   }
 
   const buffer = await fs.readFile(uploadedFile.path);
   return [makeExtractedFile(safeSingleFileName(uploadedFile.originalname), buffer)];
+}
+
+function userUploadError(message) {
+  const error = new Error(message);
+  error.status = 400;
+  return error;
+}
+
+function formatMb(bytes) {
+  return Math.round((bytes / (1024 * 1024)) * 10) / 10;
 }
 
 function makeExtractedFile(filePath, buffer) {
