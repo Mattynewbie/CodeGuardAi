@@ -396,9 +396,35 @@ function buildExtractiveFallbackAnswer(prompt, context) {
     lowerPrompt.includes('bakit') ||
     lowerPrompt.includes('paliwanag') ||
     lowerPrompt.includes('0');
+  const asksWhatToReview =
+    lowerPrompt.includes('bantayan') ||
+    lowerPrompt.includes('suspicious') ||
+    lowerPrompt.includes('red flag') ||
+    lowerPrompt.includes('what should i review') ||
+    lowerPrompt.includes('what to review') ||
+    lowerPrompt.includes('ano dapat') ||
+    lowerPrompt.includes('tingnan') ||
+    lowerPrompt.includes('i-check') ||
+    lowerPrompt.includes('pagkakaparehas') ||
+    lowerPrompt.includes('pag kakaparehas');
+  const asksForDecision =
+    lowerPrompt.includes('final decision') ||
+    lowerPrompt.includes('decision') ||
+    lowerPrompt.includes('desisyon') ||
+    lowerPrompt.includes('approve') ||
+    lowerPrompt.includes('approved') ||
+    lowerPrompt.includes('resubmit') ||
+    lowerPrompt.includes('resubmission') ||
+    lowerPrompt.includes('hatol') ||
+    lowerPrompt.includes('ano gagawin') ||
+    lowerPrompt.includes('anong gagawin');
 
   if (Number(context.scores.overallSimilarity || 0) === 0 && asksForScoreReason) {
     return buildZeroSimilarityAnswer(prompt, context);
+  }
+
+  if (asksForDecision) {
+    return buildDecisionGuidanceAnswer(prompt, context);
   }
 
   if (lowerPrompt.includes('highlight')) {
@@ -420,6 +446,10 @@ function buildExtractiveFallbackAnswer(prompt, context) {
     return `The report lists these rename indicators: ${context.renamedVariables
       .map((item) => `${item.from} -> ${item.to} (${item.confidence}%)`)
       .join(', ')}.`;
+  }
+
+  if (asksWhatToReview) {
+    return buildReviewChecklistAnswer(prompt, context);
   }
 
   if (asksForScoreReason) {
@@ -447,7 +477,8 @@ function buildZeroSimilarityAnswer(prompt, context) {
     return [
       `Naka-0% ang report dahil walang naretain na suspicious match sa comparison na ito: ${fileLabel}.`,
       `Wala ring suspicious file pairs (${context.suspiciousFilePairs.length}), highlighted code sections (${context.highlightedCodeSections.length}), o variable rename indicators (${context.renamedVariables.length}) na nakita ang system.`,
-      `Ibig sabihin, based sa available evidence ng scan, walang meaningful similarity na nakita sa dalawang submission.`,
+      `Ibig sabihin, based sa available evidence ng scan, wala siyang nakitang meaningful similarity o pagkakaparehas na umabot sa suspicious threshold.`,
+      'Posible pa ring may sobrang generic na bagay na pareho, tulad ng common keywords, punctuation, o normal syntax, pero hindi iyon sapat para tawaging suspicious code similarity.',
       extensionNote,
       'Hindi ito automatic proof na imposibleng may nangyaring copying; ibig sabihin lang ay walang detectable similarity ang tool sa files na ito. Para mas accurate, i-upload ang original source files o buong project archive, hindi generated build files gaya ng dist/assets.',
     ]
@@ -466,6 +497,79 @@ function buildZeroSimilarityAnswer(prompt, context) {
     .join(' ');
 }
 
+function buildReviewChecklistAnswer(prompt, context) {
+  const filipino = isLikelyFilipinoPrompt(prompt);
+  const hasEvidence =
+    Number(context.scores.overallSimilarity || 0) > 0 ||
+    context.suspiciousFilePairs.length > 0 ||
+    context.highlightedCodeSections.length > 0 ||
+    context.renamedVariables.length > 0;
+
+  if (filipino) {
+    if (!hasEvidence) {
+      return [
+        'Sa current report na ito, wala munang specific suspicious code na dapat i-review dahil 0% ang overall similarity, 0 ang suspicious file pairs, 0 ang highlighted sections, at 0 ang rename indicators.',
+        'Ang dapat mong bantayan sa ibang reports ay mataas na overall score, maraming matched file pairs, exact o near-exact code blocks, parehong logic flow kahit iba ang variable names, parehong comments/errors, at high structure/semantic scores.',
+        'Para sa report na ito, mas importanteng i-check kung tama ang files na na-upload. CSS build file ang isa at SQL file ang isa, kaya natural na walang meaningful match kung unrelated talaga sila.',
+      ].join(' ');
+    }
+
+    return [
+      `Bantayan ang strongest suspicious file pairs (${context.suspiciousFilePairs.length}), highlighted sections (${context.highlightedCodeSections.length}), at variable rename indicators (${context.renamedVariables.length}).`,
+      `Tingnan lalo ang scores: exact ${context.scores.exactMatch}%, structure ${context.scores.structuralSimilarity}%, semantic ${context.scores.semanticSimilarity}%, renamed ${context.scores.variableRename}%.`,
+      'Mas suspicious kapag pareho ang logic at sequence ng code kahit pinalitan ang variable names, comments, spacing, o file names.',
+    ].join(' ');
+  }
+
+  if (!hasEvidence) {
+    return 'This report has no specific suspicious code to review: 0% overall similarity, 0 suspicious file pairs, 0 highlighted sections, and 0 rename indicators. In other reports, watch for high overall scores, exact or near-exact blocks, similar structure, renamed identifiers, matching comments/errors, and repeated matched file pairs.';
+  }
+
+  return `Review the strongest suspicious file pairs (${context.suspiciousFilePairs.length}), highlighted sections (${context.highlightedCodeSections.length}), and rename indicators (${context.renamedVariables.length}). Pay close attention to exact ${context.scores.exactMatch}%, structure ${context.scores.structuralSimilarity}%, semantic ${context.scores.semanticSimilarity}%, and renamed-variable ${context.scores.variableRename}% signals.`;
+}
+
+function buildDecisionGuidanceAnswer(prompt, context) {
+  const filipino = isLikelyFilipinoPrompt(prompt);
+  const score = Number(context.scores.overallSimilarity || 0);
+  const hasEvidence =
+    score > 0 ||
+    context.suspiciousFilePairs.length > 0 ||
+    context.highlightedCodeSections.length > 0 ||
+    context.renamedVariables.length > 0;
+
+  if (filipino) {
+    if (!hasEvidence) {
+      return [
+        'Hindi ako dapat gumawa ng final plagiarism decision automatically, pero base sa report na ito wala siyang detected evidence ng similarity.',
+        'Kung tama ang na-upload na files at na-review mo na manually, reasonable na i-approve o i-clear ang report.',
+        'Kung mali ang upload, halimbawa generated CSS file ang nasama imbes na original source project, mas mabuting i-rerun muna ang scan gamit ang tamang source files bago mag-final decision.',
+      ].join(' ');
+    }
+
+    if (score >= 70) {
+      return [
+        `Hindi ako dapat magbigay ng automatic guilt decision, pero mataas ang ${score}% similarity kaya dapat manual review muna bago i-approve.`,
+        'Tingnan ang matched file pairs, highlighted sections, at rename indicators. Kung confirmed na copied or inadequately cited, request resubmission or follow your class policy.',
+      ].join(' ');
+    }
+
+    return [
+      `Hindi ako dapat gumawa ng final plagiarism decision automatically. Ang score ay ${score}%, kaya gamitin ito bilang review evidence, hindi final proof.`,
+      'I-review ang matched sections at file pairs. Kung walang strong evidence pagkatapos ng manual check, puwedeng i-approve; kung may questionable copied logic, request resubmission.',
+    ].join(' ');
+  }
+
+  if (!hasEvidence) {
+    return 'I should not make the final plagiarism decision automatically, but this report contains no detected similarity evidence. If the uploaded files are correct and manual review finds no issue, approving or clearing the report is reasonable. If the upload used generated or wrong files, rerun the scan with the original source files first.';
+  }
+
+  if (score >= 70) {
+    return `I should not make an automatic guilt decision, but ${score}% similarity is high enough to require manual review before approval. Check matched file pairs, highlighted sections, and rename indicators before deciding whether to approve or request resubmission.`;
+  }
+
+  return `I should not make the final decision automatically. Use the ${score}% similarity score as review evidence, then approve if manual review finds no strong copied logic or request resubmission if the evidence supports it.`;
+}
+
 function comparedFileLabel(context) {
   if (context.projectTitle) return context.projectTitle;
   const source = context.submissionA.title || 'Submission A';
@@ -481,7 +585,7 @@ function comparedExtensionNote(label) {
 }
 
 function isLikelyFilipinoPrompt(prompt) {
-  return /\b(bakit|paki|pwede|paliwanag|ipaliwanag|ibig sabihin|kaparehas|kopya|kinopya)\b/i.test(prompt);
+  return /\b(bakit|paki|pwede|paliwanag|ipaliwanag|ibig sabihin|kaparehas|kopya|kinopya|tagalog|tayo|bantayan|tingnan|desisyon|hatol|gagawin)\b/i.test(prompt);
 }
 
 function isClearlyUnrelated(prompt) {
