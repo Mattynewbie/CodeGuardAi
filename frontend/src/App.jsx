@@ -57,6 +57,8 @@ import {
   removeProject,
   requestProfessorAccess,
   saveApiSession,
+  updateMyProfile,
+  updateSavedApiProfile,
   updateReportDecision,
   updateAccessRequestStatus,
   updateAdminUserRole,
@@ -199,6 +201,29 @@ function App() {
         full_name: authPayload.profile?.fullName || nameFromEmail(authPayload.user.email),
       },
     });
+  }
+
+  function handleProfileUpdated(profile) {
+    const fullName = profile?.fullName || profile?.full_name || getDisplayName(session);
+    const email = profile?.email || session?.email;
+
+    updateSavedApiProfile({ ...profile, fullName, email });
+    if (profile?.role) setRole(profile.role === 'admin' ? 'Admin' : 'User');
+    setSession((current) => ({
+      ...(current || {}),
+      email,
+      user_metadata: {
+        ...(current?.user_metadata || {}),
+        full_name: fullName,
+      },
+    }));
+    setDashboard((current) => ({
+      ...current,
+      profile: {
+        ...(current?.profile || {}),
+        displayName: fullName,
+      },
+    }));
   }
 
   async function handleLogout() {
@@ -453,7 +478,7 @@ function App() {
           />
         )}
 
-        {activeView === 'settings' && <SettingsView user={session} role={role} />}
+        {activeView === 'settings' && <SettingsView user={session} role={role} onProfileUpdated={handleProfileUpdated} />}
       </main>
     </div>
   );
@@ -2105,26 +2130,212 @@ function StatusPill({ status }) {
   return <span className={`status-pill ${className}`}>{status}</span>;
 }
 
-function SettingsView({ user, role }) {
+function SettingsView({ user, role, onProfileUpdated }) {
+  const [fullName, setFullName] = useState(() => getDisplayName(user));
+  const [email, setEmail] = useState(() => user?.email || '');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const signedInEmail = user?.email || '';
+  const emailChanged = email.trim().toLowerCase() !== signedInEmail.trim().toLowerCase();
+  const passwordChanging = Boolean(newPassword || confirmPassword);
+  const requiresCurrentPassword = emailChanged || passwordChanging;
+
+  useEffect(() => {
+    setFullName(getDisplayName(user));
+    setEmail(user?.email || '');
+  }, [user?.id, user?.email, user?.user_metadata?.full_name]);
+
+  async function submitProfileUpdate(event) {
+    event.preventDefault();
+    setError('');
+    setSuccess('');
+
+    const cleanFullName = fullName.trim().replace(/\s+/g, ' ');
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanFullName) {
+      setError('Full name is required.');
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setError('Enter a valid email address.');
+      return;
+    }
+
+    if (passwordChanging && newPassword.length < 8) {
+      setError('New password must be at least 8 characters.');
+      return;
+    }
+
+    if (passwordChanging && newPassword !== confirmPassword) {
+      setError('New password and confirmation do not match.');
+      return;
+    }
+
+    if (requiresCurrentPassword && !currentPassword) {
+      setError('Enter your current password before changing email or password.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const data = await updateMyProfile({
+        fullName: cleanFullName,
+        email: cleanEmail,
+        currentPassword: currentPassword || undefined,
+        newPassword: passwordChanging ? newPassword : undefined,
+        confirmPassword: passwordChanging ? confirmPassword : undefined,
+      });
+
+      await supabase?.auth.refreshSession().catch(() => null);
+      onProfileUpdated?.(data.profile);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setSuccess('Profile updated successfully.');
+    } catch (updateError) {
+      setError(updateError.message || 'Unable to update profile.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <section className="panel dashboard-panel settings-panel">
       <div className="panel-heading">
         <h3>Settings</h3>
         <Settings size={22} />
       </div>
-      <div className="settings-grid">
-        <article>
-          <span>Signed in as</span>
-          <strong>{user.email}</strong>
-        </article>
-        <article>
-          <span>Role</span>
-          <strong>{displayRoleLabel(role)}</strong>
-        </article>
-        <article>
-          <span>Analysis mode</span>
-          <strong>Token, structure, and local model checks</strong>
-        </article>
+
+      <div className="settings-content">
+        <div className="settings-grid">
+          <article>
+            <span>Signed in as</span>
+            <strong>{signedInEmail}</strong>
+          </article>
+          <article>
+            <span>Role</span>
+            <strong>{displayRoleLabel(role)}</strong>
+          </article>
+          <article>
+            <span>Analysis mode</span>
+            <strong>Token, structure, and local model checks</strong>
+          </article>
+        </div>
+
+        <form className="settings-profile-form" onSubmit={submitProfileUpdate}>
+          <div className="settings-form-heading">
+            <div>
+              <h4>Edit profile</h4>
+              <p>Update your account information and password for this workspace.</p>
+            </div>
+            <UserRound size={22} />
+          </div>
+
+          <div className="settings-form-grid">
+            <label className="form-field">
+              Full name
+              <input
+                value={fullName}
+                onChange={(event) => setFullName(event.target.value)}
+                placeholder="Prof. Maria Santos"
+                autoComplete="name"
+                maxLength={120}
+                required
+              />
+            </label>
+
+            <label className="form-field">
+              Email
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                placeholder="professor@school.edu"
+                autoComplete="username"
+                required
+              />
+            </label>
+          </div>
+
+          <div className="settings-password-grid">
+            <div className="form-field">
+              <label htmlFor="settings-current-password">Current password</label>
+              <div className="password-field">
+                <input
+                  id="settings-current-password"
+                  type={showCurrentPassword ? 'text' : 'password'}
+                  value={currentPassword}
+                  onChange={(event) => setCurrentPassword(event.target.value)}
+                  placeholder={requiresCurrentPassword ? 'Required for email/password changes' : 'Required only for sensitive changes'}
+                  autoComplete="current-password"
+                />
+                <button
+                  className="password-toggle"
+                  type="button"
+                  onClick={() => setShowCurrentPassword((current) => !current)}
+                  aria-label={showCurrentPassword ? 'Hide current password' : 'Show current password'}
+                >
+                  {showCurrentPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  <span>{showCurrentPassword ? 'Hide' : 'Show'}</span>
+                </button>
+              </div>
+            </div>
+
+            <label className="form-field">
+              New password
+              <div className="password-field">
+                <input
+                  type={showNewPassword ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(event) => setNewPassword(event.target.value)}
+                  placeholder="Leave blank to keep current password"
+                  autoComplete="new-password"
+                  minLength={8}
+                />
+                <button
+                  className="password-toggle"
+                  type="button"
+                  onClick={() => setShowNewPassword((current) => !current)}
+                  aria-label={showNewPassword ? 'Hide new password' : 'Show new password'}
+                >
+                  {showNewPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  <span>{showNewPassword ? 'Hide' : 'Show'}</span>
+                </button>
+              </div>
+            </label>
+
+            <label className="form-field">
+              Confirm new password
+              <input
+                type={showNewPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                placeholder="Repeat new password"
+                autoComplete="new-password"
+                minLength={8}
+              />
+            </label>
+          </div>
+
+          {error && <p className="form-error">{error}</p>}
+          {success && <p className="form-success">{success}</p>}
+
+          <div className="settings-form-actions">
+            <button className="primary-button" type="submit" disabled={saving}>
+              <CheckCircle2 size={18} />
+              {saving ? 'Saving...' : 'Save profile'}
+            </button>
+            <span>{requiresCurrentPassword ? 'Current password will be verified before saving.' : 'Name changes can be saved without your password.'}</span>
+          </div>
+        </form>
       </div>
     </section>
   );

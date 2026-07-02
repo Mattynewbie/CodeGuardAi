@@ -31,6 +31,7 @@ import {
   loginUser,
   persistAnalysis,
   requestProfessorAccess,
+  updateCurrentUserProfile,
   updateReportDecision,
   updateAccessRequestStatus,
   updateUserRole,
@@ -137,6 +138,16 @@ app.get('/api/ai/status', (_request, response) => {
     similarity: getAiRuntimeInfo(),
     reportAssistant: getReportAssistantRuntimeInfo(),
   });
+});
+
+app.patch('/api/me/profile', mutationRateLimit, async (request, response, next) => {
+  try {
+    const user = await identifyRequestUser(request.headers.authorization);
+    const profile = await updateCurrentUserProfile(request.body || {}, { user });
+    response.json({ profile });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/auth/login', authRateLimit, async (request, response, next) => {

@@ -125,17 +125,108 @@ export async function identifyRequestUser(authorizationHeader) {
 
   const { data: profile } = await supabase
     .from('users')
-    .select('full_name, role')
+    .select('email, full_name, role')
     .eq('id', data.user.id)
     .maybeSingle();
 
   return {
     id: data.user.id,
-    email: data.user.email,
+    email: profile?.email || data.user.email,
     fullName: profile?.full_name,
     role: profile?.role || 'user',
     user_metadata: data.user.user_metadata || {},
   };
+}
+
+export async function updateCurrentUserProfile(
+  { fullName, email, currentPassword, newPassword, confirmPassword } = {},
+  { user } = {},
+) {
+  if (supabase) requireAuthenticatedUser(user);
+
+  const cleanFullName = normalizeProfileName(fullName || user?.fullName || user?.user_metadata?.full_name);
+  const normalizedEmail = normalizeEmail(email || user?.email);
+  const cleanCurrentPassword = String(currentPassword || '');
+  const cleanNewPassword = String(newPassword || '');
+  const cleanConfirmPassword = String(confirmPassword || '');
+
+  if (!cleanFullName) throw new ApiError(400, 'Full name is required.');
+  if (cleanFullName.length > 120) throw new ApiError(400, 'Full name must be 120 characters or fewer.');
+  if (!normalizedEmail || !isValidEmail(normalizedEmail)) throw new ApiError(400, 'A valid email address is required.');
+  if (cleanNewPassword && cleanNewPassword.length < 8) {
+    throw new ApiError(400, 'New password must be at least 8 characters.');
+  }
+  if (cleanNewPassword && cleanConfirmPassword && cleanNewPassword !== cleanConfirmPassword) {
+    throw new ApiError(400, 'New password and confirmation do not match.');
+  }
+
+  const emailChanged = Boolean(user?.email) && normalizedEmail !== String(user.email).trim().toLowerCase();
+  const passwordChanged = Boolean(cleanNewPassword);
+  const requiresCurrentPassword = emailChanged || passwordChanged;
+
+  if (requiresCurrentPassword && !cleanCurrentPassword) {
+    throw new ApiError(400, 'Current password is required to change email or password.');
+  }
+
+  if (!supabase) {
+    requireLocalDemoMode();
+    return {
+      id: user?.id || 'local-user',
+      email: normalizedEmail,
+      fullName: cleanFullName,
+      role: user?.role || 'user',
+    };
+  }
+
+  if (requiresCurrentPassword) {
+    const { error: verifyError } = await supabase.auth.signInWithPassword({
+      email: user.email,
+      password: cleanCurrentPassword,
+    });
+
+    if (verifyError) throw new ApiError(401, 'Current password is incorrect.');
+  }
+
+  const authUpdates = {
+    user_metadata: {
+      ...(user.user_metadata || {}),
+      full_name: cleanFullName,
+    },
+  };
+
+  if (emailChanged) authUpdates.email = normalizedEmail;
+  if (passwordChanged) authUpdates.password = cleanNewPassword;
+
+  const { data: authData, error: authError } = await supabase.auth.admin.updateUserById(user.id, authUpdates);
+  if (authError) {
+    throw new ApiError(authError.status || 400, normalizeAuthMessage(authError.message));
+  }
+
+  const { data: profile, error: profileError } = await supabase
+    .from('users')
+    .update({
+      email: normalizedEmail,
+      full_name: cleanFullName,
+    })
+    .eq('id', user.id)
+    .select('id, email, full_name, role')
+    .single();
+
+  if (profileError?.code === '23505') throw new ApiError(409, 'A user with this email already exists.');
+  if (profileError) throw profileError;
+
+  await supabase.from('activity_logs').insert({
+    actor_id: user.id,
+    action: 'user.profile_updated',
+    entity_type: 'user',
+    entity_id: user.id,
+    metadata: {
+      emailChanged,
+      passwordChanged,
+    },
+  });
+
+  return toCurrentUserProfile(profile, authData.user);
 }
 
 export async function fetchComparisonCorpus({ user } = {}) {
@@ -1243,10 +1334,10 @@ function lastLineNumber(range) {
 }
 
 function validateAuthInput({ email, password }) {
-  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
   const cleanPassword = String(password || '');
 
-  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+  if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
     throw new ApiError(400, 'A valid email address is required.');
   }
 
@@ -1258,20 +1349,32 @@ function validateAuthInput({ email, password }) {
 }
 
 function validateAccessRequestInput({ email, fullName }) {
-  const normalizedEmail = String(email || '').trim().toLowerCase();
-  const displayName = String(fullName || '')
-    .trim()
-    .replace(/\s+/g, ' ');
+  const normalizedEmail = normalizeEmail(email);
+  const displayName = normalizeProfileName(fullName);
 
   if (!displayName) {
     throw new ApiError(400, 'Full name is required to request professor access.');
   }
 
-  if (!normalizedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+  if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
     throw new ApiError(400, 'A valid institutional email address is required.');
   }
 
   return { normalizedEmail, displayName };
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function normalizeProfileName(fullName) {
+  return String(fullName || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 async function ensureUserProfile(authUser, defaults = {}) {
@@ -1331,6 +1434,15 @@ function toAuthResponse(authData, profile) {
       expires_in: authData.session?.expires_in,
       token_type: authData.session?.token_type || 'bearer',
     },
+  };
+}
+
+function toCurrentUserProfile(profile, authUser) {
+  return {
+    id: profile?.id || authUser?.id,
+    email: profile?.email || authUser?.email,
+    fullName: profile?.full_name || authUser?.user_metadata?.full_name || authUser?.email,
+    role: profile?.role || 'user',
   };
 }
 

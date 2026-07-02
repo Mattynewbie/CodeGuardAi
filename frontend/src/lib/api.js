@@ -52,6 +52,34 @@ export function loadApiSession() {
   }
 }
 
+export function updateSavedApiProfile(profile) {
+  const saved = loadApiSession();
+  if (!saved?.session?.access_token) return;
+
+  const fullName = profile?.fullName || profile?.full_name || saved.profile?.fullName || saved.user?.user_metadata?.full_name;
+  const email = profile?.email || saved.user?.email;
+  const nextSession = {
+    ...saved,
+    user: {
+      ...(saved.user || {}),
+      email,
+      user_metadata: {
+        ...(saved.user?.user_metadata || {}),
+        full_name: fullName,
+      },
+    },
+    profile: {
+      ...(saved.profile || {}),
+      ...profile,
+      fullName,
+      email,
+    },
+  };
+
+  getSessionStore()?.setItem(fallbackSessionKey, JSON.stringify(nextSession));
+  getLocalStore()?.removeItem(fallbackSessionKey);
+}
+
 export function clearApiSession() {
   getSessionStore()?.removeItem(fallbackSessionKey);
   getLocalStore()?.removeItem(fallbackSessionKey);
@@ -98,6 +126,16 @@ export function loginWithBackend(payload) {
 export function requestProfessorAccess(payload) {
   return apiRequest('/api/auth/access-request', {
     method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateMyProfile(payload) {
+  return apiRequest('/api/me/profile', {
+    method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
     },
