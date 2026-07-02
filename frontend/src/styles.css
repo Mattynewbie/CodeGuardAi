@@ -691,7 +691,22 @@ select:focus {
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-.sidebar-user .icon-button {
+.sidebar-user > div:not(.avatar) {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sidebar-user strong,
+.sidebar-user span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-user .icon-button,
+.sidebar-user button {
   flex: 0 0 auto;
 }
 
@@ -712,6 +727,12 @@ select:focus {
 
 .topbar > div:first-child {
   min-width: 0;
+  max-width: min(760px, 100%);
+}
+
+.topbar > div:first-child h2,
+.topbar > div:first-child p {
+  overflow-wrap: anywhere;
 }
 
 .topbar-actions {

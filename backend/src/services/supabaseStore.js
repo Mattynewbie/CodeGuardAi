@@ -1046,7 +1046,7 @@ function rememberLocalAnalysis({ user, uploadedFile, sourceDocuments, sourceSubm
 
 function buildDashboardPayload({ projects, users, displayName }) {
   const totalProjects = Math.max(projects.length, 0);
-  const totalChecks = Math.max(totalProjects + 7, 0);
+  const totalChecks = projects.filter((project) => project.reportId).length;
   const averageSimilarity = totalProjects
     ? round1(projects.reduce((total, project) => total + Number(project.highestSimilarity || 0), 0) / totalProjects)
     : 0;

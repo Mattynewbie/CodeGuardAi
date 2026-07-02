@@ -39,7 +39,6 @@ import {
   UsersRound,
   X,
 } from 'lucide-react';
-import { demoProjects, demoUsers } from './data/mockData.js';
 import {
   apiRequest,
   askReportAssistant,
@@ -117,11 +116,11 @@ function App() {
   const [activeView, setActiveView] = useState(() => initialWorkspaceNavigation.activeView);
   const [selectedReport, setSelectedReport] = useState(null);
   const [restoredReportId, setRestoredReportId] = useState(() => initialWorkspaceNavigation.reportId);
-  const [projects, setProjects] = useState(demoProjects);
-  const [submissions, setSubmissions] = useState(() => demoProjects.map(projectToSubmission));
-  const [comparisons, setComparisons] = useState(() => demoProjects.map(projectToComparison));
-  const [dashboard, setDashboard] = useState(() => makeFallbackDashboard(demoProjects));
-  const [users, setUsers] = useState(demoUsers);
+  const [projects, setProjects] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
+  const [comparisons, setComparisons] = useState([]);
+  const [dashboard, setDashboard] = useState(() => makeFallbackDashboard([]));
+  const [users, setUsers] = useState([]);
   const [accessRequests, setAccessRequests] = useState([]);
   const [loadingDashboard, setLoadingDashboard] = useState(false);
 
@@ -210,6 +209,17 @@ function App() {
     setShowAuth(false);
     setRestoredReportId('');
     setActiveView('dashboard');
+    resetWorkspaceState();
+  }
+
+  function resetWorkspaceState() {
+    setProjects([]);
+    setSubmissions([]);
+    setComparisons([]);
+    setDashboard(makeFallbackDashboard([]));
+    setUsers([]);
+    setAccessRequests([]);
+    setSelectedReport(null);
   }
 
   function addAnalyzedProject(project, report) {
@@ -262,7 +272,7 @@ function App() {
         loadProjects(),
         loadSubmissions(),
         loadComparisons(),
-        role === 'Admin' ? loadAdminUsers() : Promise.resolve({ users }),
+        role === 'Admin' ? loadAdminUsers() : Promise.resolve({ users: [] }),
         role === 'Admin' ? loadAccessRequests() : Promise.resolve({ accessRequests: [] }),
       ]);
 
@@ -273,9 +283,12 @@ function App() {
       setUsers(userData.users || []);
       setAccessRequests(accessRequestData.accessRequests || []);
     } catch {
-      setDashboard(makeFallbackDashboard(projects));
-      setSubmissions(projects.map(projectToSubmission));
-      setComparisons(projects.map(projectToComparison));
+      setDashboard(makeFallbackDashboard([]));
+      setProjects([]);
+      setSubmissions([]);
+      setComparisons([]);
+      setUsers([]);
+      setAccessRequests([]);
     } finally {
       setLoadingDashboard(false);
     }
@@ -283,6 +296,29 @@ function App() {
 
   useEffect(() => {
     if (session) refreshWorkspace();
+  }, [session, role]);
+
+  useEffect(() => {
+    if (!session || role !== 'Admin') return undefined;
+
+    let cancelled = false;
+    async function refreshAccessRequestsOnly() {
+      try {
+        const data = await loadAccessRequests();
+        if (!cancelled) setAccessRequests(data.accessRequests || []);
+      } catch {
+        // Keep the current list if a background refresh fails.
+      }
+    }
+
+    const intervalId = window.setInterval(refreshAccessRequestsOnly, 30000);
+    window.addEventListener('focus', refreshAccessRequestsOnly);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshAccessRequestsOnly);
+    };
   }, [session, role]);
 
   useEffect(() => {
@@ -352,6 +388,7 @@ function App() {
           role={role}
           user={session}
           dashboard={dashboard}
+          accessRequests={accessRequests}
           activeView={activeView}
           setActiveView={setActiveView}
           onOpenReport={handleOpenReportById}
@@ -423,7 +460,7 @@ function App() {
 }
 
 function makeFallbackDashboard(projects) {
-  const safeProjects = projects.length ? projects : demoProjects;
+  const safeProjects = projects;
   const average = safeProjects.length
     ? Math.round(
         safeProjects.reduce((total, project) => total + Number(project.highestSimilarity || 0), 0) /
@@ -1224,7 +1261,7 @@ function Sidebar({ activeView, setActiveView, isAdmin, role, user, onLogout }) {
   );
 }
 
-function Topbar({ role, user, dashboard, activeView, setActiveView, onOpenReport, onLogout }) {
+function Topbar({ role, user, dashboard, accessRequests = [], activeView, setActiveView, onOpenReport, onLogout }) {
   const [open, setOpen] = useState(false);
   const [sidebarClosing, setSidebarClosing] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -1232,7 +1269,10 @@ function Topbar({ role, user, dashboard, activeView, setActiveView, onOpenReport
   const sidebarCloseTimer = useRef(null);
   const isDashboard = activeView === 'dashboard';
   const displayName = dashboard?.profile?.displayName || getDisplayName(user);
-  const notifications = useMemo(() => buildHeaderNotifications(dashboard), [dashboard]);
+  const notifications = useMemo(
+    () => buildHeaderNotifications({ dashboard, accessRequests, role }),
+    [dashboard, accessRequests, role],
+  );
   const mobileNavItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'upload', label: 'Upload Project', icon: UploadCloud },
@@ -1293,11 +1333,15 @@ function Topbar({ role, user, dashboard, activeView, setActiveView, onOpenReport
     };
   }, [notificationsOpen]);
 
-  function openNotificationReport(reportId) {
+  function openNotification(item) {
     markNotificationsSeen();
     setNotificationsOpen(false);
-    if (reportId) {
-      onOpenReport?.(reportId);
+    if (item?.type === 'access_request') {
+      setActiveView('admin');
+      return;
+    }
+    if (item?.reportId) {
+      onOpenReport?.(item.reportId);
       return;
     }
     setActiveView('comparisons');
@@ -1397,10 +1441,10 @@ function Topbar({ role, user, dashboard, activeView, setActiveView, onOpenReport
               <div className="notification-list">
                 {notifications.length ? (
                   notifications.map((item) => {
-                    const Icon = item.score >= 70 ? AlertTriangle : CheckCircle2;
+                    const Icon = item.type === 'access_request' ? UsersRound : item.score >= 70 ? AlertTriangle : CheckCircle2;
                     return (
                       <article className="notification-item" key={item.id}>
-                        <div className={item.score >= 70 ? 'notification-mark high' : 'notification-mark'}>
+                        <div className={item.score >= 70 || item.type === 'access_request' ? 'notification-mark high' : 'notification-mark'}>
                           <Icon size={17} />
                         </div>
                         <div className="notification-copy">
@@ -1411,7 +1455,7 @@ function Topbar({ role, user, dashboard, activeView, setActiveView, onOpenReport
                         <button
                           className="notification-view-button"
                           type="button"
-                          onClick={() => openNotificationReport(item.reportId)}
+                          onClick={() => openNotification(item)}
                         >
                           View
                         </button>
@@ -1509,10 +1553,26 @@ function Topbar({ role, user, dashboard, activeView, setActiveView, onOpenReport
   );
 }
 
-function buildHeaderNotifications(dashboard) {
+function buildHeaderNotifications({ dashboard, accessRequests = [], role }) {
   const recentChecks = dashboard?.recentChecks || [];
   const topMatches = dashboard?.topMatches || [];
   const entries = new Map();
+
+  if (role === 'Admin') {
+    accessRequests
+      .filter((request) => request.status === 'Pending')
+      .slice(0, 5)
+      .forEach((request) => {
+        entries.set(`access-${request.id}`, {
+          id: `access-${request.id}`,
+          type: 'access_request',
+          title: 'Professor access request',
+          score: 100,
+          date: request.createdAt,
+          message: `${request.name || request.email} is waiting for account review`,
+        });
+      });
+  }
 
   recentChecks.forEach((check, index) => {
     const score = Number(check.score || 0);
@@ -1542,7 +1602,7 @@ function buildHeaderNotifications(dashboard) {
 
   const items = Array.from(entries.values());
   const flagged = items.filter((item) => item.score >= 70);
-  return (flagged.length ? flagged : items).slice(0, 5);
+  return (flagged.length ? flagged : items).slice(0, 7);
 }
 
 function notificationSeenStorageKeyForUser(user) {
