@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+backend-dev.log
+backend-dev.err.log
+frontend-dev.log
+frontend-dev.err.log
+
+# Build output
+dist/
+build/
+out/
+.vite/
+
+# Test and coverage output
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# Cache and temporary files
+cache/
+.cache/
+tmp/
+temp/
+.tmp/
+.parcel-cache/
+.turbo/
+
+# Uploaded or generated user files
+uploads/
+**/uploads/
+storage/
+**/storage/
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local certificates and keys
+*.pem
+*.key
+*.crt
