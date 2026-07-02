@@ -599,6 +599,37 @@ Useful VS Code actions:
 5. Add the project URL and keys to `.env`.
 6. Restart the backend and frontend.
 
+## Testing With The Same Database
+
+All developers can test against the same Supabase project by using the same private `.env` values on their own computers. Do not commit `.env`.
+
+The project leader should share these values privately:
+
+```text
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_STORAGE_BUCKET=project-uploads
+```
+
+Each teammate should set up their local copy:
+
+```bash
+git clone https://github.com/Mattynewbie/CodeGuardAi.git
+cd CodeGuardAi
+npm install
+copy .env.example .env
+```
+
+Then paste the shared Supabase values into `.env` and start the project:
+
+```bash
+npm run dev
+```
+
+Use separate user accounts in Supabase Auth for each teammate. This lets everyone test with the same database while still keeping activity, ownership, and permissions separate.
+
 Seeded accounts:
 
 ```text
