@@ -917,10 +917,10 @@ function LandingPage({ onEnter }) {
 
 function AuthScreen({ onDemoLogin, onBackendAuth, onBack, role, setRole, isModal = false }) {
   const [mode, setMode] = useState('login');
-  const [email, setEmail] = useState('professor@sourcecodechecker.edu');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [fullName, setFullName] = useState('Prof. James Dela Torre');
+  const [fullName, setFullName] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1042,7 +1042,12 @@ function AuthScreen({ onDemoLogin, onBackendAuth, onBack, role, setRole, isModal
           {mode === 'register' && (
             <label>
               Full name
-              <input value={fullName} onChange={(event) => setFullName(event.target.value)} />
+              <input
+                value={fullName}
+                onChange={(event) => setFullName(event.target.value)}
+                placeholder="Prof. Maria Santos"
+                autoComplete="name"
+              />
             </label>
           )}
           <label>
@@ -1052,6 +1057,7 @@ function AuthScreen({ onDemoLogin, onBackendAuth, onBack, role, setRole, isModal
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="professor@school.edu"
+              autoComplete="username"
               required
             />
           </label>
@@ -1064,6 +1070,8 @@ function AuthScreen({ onDemoLogin, onBackendAuth, onBack, role, setRole, isModal
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
                   required
                   minLength={6}
                 />

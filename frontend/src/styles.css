@@ -447,6 +447,20 @@ input {
   background: var(--surface);
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: rgba(100, 116, 139, 0.72);
+  font-weight: 600;
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--ink);
+  box-shadow: 0 0 0 1000px var(--surface) inset;
+  transition: background-color 9999s ease-out;
+}
+
 input:focus {
   outline: 3px solid rgba(15, 118, 110, 0.18);
   border-color: var(--teal);
