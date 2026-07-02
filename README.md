@@ -13,7 +13,6 @@ This repository now uses Git and GitHub as the official version control workflow
 ├── supabase/schema.sql      Supabase database, RLS, and storage policies
 ├── supabase/seed_accounts.sql
 ├── docs/                    Architecture and deployment documentation
-├── .env.example             Environment variable template
 ├── .gitignore               Files Git must not track
 ├── package.json             Workspace scripts
 └── README.md                Project and Git workflow guide
@@ -27,11 +26,13 @@ Install dependencies:
 npm install
 ```
 
-Copy environment variables:
+Create your local environment file:
 
 ```bash
-copy .env.example .env
+type nul > .env
 ```
+
+Paste the private Supabase values shared by the project leader into `.env`.
 
 Start both apps:
 
@@ -61,7 +62,7 @@ After the GitHub repository is created, new members should clone it instead of c
 git clone https://github.com/YOUR_ORG/YOUR_REPOSITORY.git
 cd YOUR_REPOSITORY
 npm install
-copy .env.example .env
+type nul > .env
 npm run dev
 ```
 
@@ -546,7 +547,7 @@ GitHub will automatically show the repository checklist from `.github/PULL_REQUE
 - Never send ZIP or RAR copies of the project as the source of truth.
 - Never overwrite another member's work by copying folders.
 - Commit frequently with meaningful messages.
-- Keep `.env` private and share only `.env.example`.
+- Keep `.env` private. Share example values through documentation only, never real secrets.
 - Keep generated files, logs, uploads, and dependencies out of Git.
 - Use Pull Requests for review before merging shared branches.
 
@@ -619,7 +620,7 @@ Each teammate should set up their local copy:
 git clone https://github.com/Mattynewbie/CodeGuardAi.git
 cd CodeGuardAi
 npm install
-copy .env.example .env
+type nul > .env
 ```
 
 Then paste the shared Supabase values into `.env` and start the project:
