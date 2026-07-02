@@ -6,8 +6,15 @@ const fallbackSessionKey = 'scsd_api_session';
 export const API_URL = resolveApiUrl();
 
 function resolveApiUrl() {
-  if (configuredApiUrl && configuredApiUrl.trim()) {
-    return configuredApiUrl.trim().replace(/\/$/, '');
+  const configured = configuredApiUrl?.trim().replace(/\/$/, '');
+  if (configured) {
+    const isLocalApi =
+      configured.includes('localhost') ||
+      configured.includes('127.0.0.1') ||
+      configured.includes('[::1]');
+
+    if (!import.meta.env.DEV && isLocalApi) return '';
+    return configured;
   }
 
   if (typeof window !== 'undefined' && !import.meta.env.DEV) return '';
@@ -218,7 +225,9 @@ async function fetchWithOptionalRetry(path, { fetchOptions, headers, retryOnNetw
 
   if (lastNetworkError) {
     throw new Error(
-      `Cannot reach the CodeGuard AI API. Make sure the backend is running on port 4100, then try the AI chat again.`,
+      import.meta.env.DEV
+        ? 'Cannot reach the CodeGuard AI API. Make sure the backend is running on port 4100, then try the AI chat again.'
+        : 'Cannot reach the CodeGuard AI API. Please refresh the live app and try again.',
     );
   }
 
@@ -229,10 +238,17 @@ function buildApiUrlCandidates() {
   const candidates = [API_URL];
 
   if (typeof window !== 'undefined') {
-    const { protocol, hostname } = window.location;
-    if (hostname) candidates.push(`${protocol}//${hostname}:4100`);
+    if (!import.meta.env.DEV) candidates.push('');
+
+    if (import.meta.env.DEV) {
+      const { protocol, hostname } = window.location;
+      if (hostname) candidates.push(`${protocol}//${hostname}:4100`);
+    }
   }
 
-  candidates.push('http://127.0.0.1:4100', 'http://localhost:4100');
-  return Array.from(new Set(candidates.filter((base) => typeof base === 'string' && base.length > 0)));
+  if (import.meta.env.DEV) {
+    candidates.push('http://127.0.0.1:4100', 'http://localhost:4100');
+  }
+
+  return Array.from(new Set(candidates.filter((base) => typeof base === 'string')));
 }
