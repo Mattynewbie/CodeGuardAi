@@ -6,19 +6,11 @@ const fallbackSessionKey = 'scsd_api_session';
 export const API_URL = resolveApiUrl();
 
 function resolveApiUrl() {
-  if (typeof window !== 'undefined') {
-    const { protocol, hostname } = window.location;
-    const isLocalHost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
-    const shouldUsePageHost =
-      !isLocalHost &&
-      (!configuredApiUrl ||
-        configuredApiUrl.includes('localhost') ||
-        configuredApiUrl.includes('127.0.0.1'));
-
-    if (shouldUsePageHost) return `${protocol}//${hostname}:4100`;
+  if (configuredApiUrl && configuredApiUrl.trim()) {
+    return configuredApiUrl.trim().replace(/\/$/, '');
   }
 
-  if (configuredApiUrl !== undefined) return configuredApiUrl;
+  if (typeof window !== 'undefined' && !import.meta.env.DEV) return '';
   return import.meta.env.DEV ? 'http://localhost:4100' : '';
 }
 

@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: codeguard-ai
+    env: node
+    plan: free
+    branch: main
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGIN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: project-uploads
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: VITE_API_URL
+        value: ""
+      - key: MAX_UPLOAD_MB
+        value: "40"
+      - key: ENABLE_LOCAL_AI
+        value: "true"
+      - key: LOCAL_AI_MODEL
+        value: Xenova/all-MiniLM-L6-v2
+      - key: ENABLE_REPORT_ASSISTANT_AI
+        value: "true"
+      - key: REPORT_ASSISTANT_MODEL
+        value: Xenova/flan-t5-small
+      - key: REPORT_ASSISTANT_TASK
+        value: text2text-generation
