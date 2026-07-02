@@ -782,17 +782,6 @@ export async function requestProfessorAccess({ email, fullName } = {}) {
     return accessRequest;
   }
 
-  const { data: existingRequests, error: existingError } = await supabase
-    .from('activity_logs')
-    .select('id, metadata, created_at')
-    .eq('action', 'access.requested')
-    .contains('metadata', { email: normalizedEmail, status: 'pending' })
-    .order('created_at', { ascending: false })
-    .limit(1);
-
-  if (existingError) throw existingError;
-  if (existingRequests?.[0]) return toAccessRequest(existingRequests[0]);
-
   const { data, error } = await supabase
     .from('activity_logs')
     .insert({
@@ -830,7 +819,7 @@ export async function fetchAccessRequests({ user } = {}) {
     .limit(100);
 
   if (error) throw error;
-  return (data || []).map((row) => toAccessRequest(row));
+  return dedupeAccessRequests(data || []);
 }
 
 export async function updateAccessRequestStatus(requestId, status, { user } = {}) {
@@ -1372,6 +1361,26 @@ function toAccessRequest(row) {
     createdAt: row.created_at || metadata.requestedAt || new Date().toISOString(),
     reviewedAt: metadata.reviewedAt || null,
   };
+}
+
+function dedupeAccessRequests(rows = []) {
+  const seenPendingEmails = new Set();
+  const requests = [];
+
+  for (const row of rows) {
+    const request = toAccessRequest(row);
+    const emailKey = request.email.toLowerCase();
+    const isPending = request.status.toLowerCase() === 'pending';
+
+    if (isPending && emailKey) {
+      if (seenPendingEmails.has(emailKey)) continue;
+      seenPendingEmails.add(emailKey);
+    }
+
+    requests.push(request);
+  }
+
+  return requests;
 }
 
 function normalizeAccessRequestStatus(status = 'pending') {

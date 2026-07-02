@@ -123,6 +123,10 @@ create index if not exists idx_similarity_results_source_project_id on public.si
 create index if not exists idx_similarity_results_compared_project_id on public.similarity_results(compared_project_id);
 create index if not exists idx_reports_project_id on public.reports(project_id);
 create index if not exists idx_activity_logs_actor_id on public.activity_logs(actor_id);
+create index if not exists idx_activity_logs_action_created_at on public.activity_logs(action, created_at desc);
+create index if not exists idx_activity_logs_access_request_email
+on public.activity_logs ((metadata->>'email'))
+where action = 'access.requested';
 
 create or replace function public.set_updated_at()
 returns trigger
