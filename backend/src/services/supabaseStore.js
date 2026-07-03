@@ -10,6 +10,7 @@ const supabase =
         auth: { persistSession: false },
       })
     : null;
+const sourceTextDecoder = new TextDecoder('utf-8', { fatal: false });
 
 export const isSupabaseConfigured = Boolean(supabase);
 
@@ -739,8 +740,8 @@ async function enrichReportEvidence(report) {
     const evidence = await loadEvidenceDocumentsForPair(report, pair);
     if (!evidence?.source || !evidence?.compared) continue;
 
-    const sourceBlock = storedSnippetBlock(evidence.source);
-    const comparedBlock = storedSnippetBlock(evidence.compared);
+    const sourceBlock = await storedSnippetBlock(evidence.source);
+    const comparedBlock = await storedSnippetBlock(evidence.compared);
     if (!sourceBlock || !comparedBlock) continue;
 
     sections.push({
@@ -768,7 +769,7 @@ async function loadEvidenceDocumentsForPair(report, pair) {
   if (pair.sourceId && pair.comparedId) {
     const { data, error } = await supabase
       .from('extracted_code_files')
-      .select('id, project_id, file_path, normalized_code, metrics')
+      .select('id, project_id, file_path, normalized_code, metrics, uploaded_files(storage_path, archive_type, original_name)')
       .in('id', [pair.sourceId, pair.comparedId]);
 
     if (error) throw error;
@@ -799,7 +800,7 @@ async function loadEvidenceDocumentsForPair(report, pair) {
 async function loadEvidenceDocumentByPath(projectId, filePath) {
   const { data, error } = await supabase
     .from('extracted_code_files')
-    .select('id, project_id, file_path, normalized_code, metrics')
+    .select('id, project_id, file_path, normalized_code, metrics, uploaded_files(storage_path, archive_type, original_name)')
     .eq('project_id', projectId)
     .eq('file_path', filePath)
     .maybeSingle();
@@ -827,8 +828,8 @@ async function repairNormalizedMatchedSections(report) {
       continue;
     }
 
-    const sourceBlock = storedSnippetBlock(evidence.source);
-    const comparedBlock = storedSnippetBlock(evidence.compared);
+    const sourceBlock = await storedSnippetBlock(evidence.source);
+    const comparedBlock = await storedSnippetBlock(evidence.compared);
     if (!sourceBlock || !comparedBlock) {
       repairedSections.push(section);
       continue;
@@ -873,8 +874,8 @@ function looksLikeNormalizedTokens(value) {
   return identifierTokens.length >= 3 || (identifierTokens.length >= 1 && numberTokens.length >= 1);
 }
 
-function storedSnippetBlock(row) {
-  const text = String(row?.metrics?.rawCode || row?.normalized_code || '').trim();
+async function storedSnippetBlock(row) {
+  const text = String(row?.metrics?.rawCode || (await loadOriginalCodeFromStorage(row)) || row?.normalized_code || '').trim();
   if (!text) return null;
 
   const sourceLines = text.includes('\n') ? text.split(/\r?\n/) : wrapText(text, 74);
@@ -885,6 +886,21 @@ function storedSnippetBlock(row) {
     lines: `1-${lines.length}`,
     snippet: lines.join('\n'),
   };
+}
+
+async function loadOriginalCodeFromStorage(row) {
+  const uploadedFile = firstProfile(row?.uploaded_files);
+  if (!uploadedFile?.storage_path || uploadedFile.archive_type !== 'single') return '';
+
+  try {
+    const { data, error } = await supabase.storage.from(config.storageBucket).download(uploadedFile.storage_path);
+    if (error || !data) return '';
+
+    const buffer = Buffer.from(await data.arrayBuffer());
+    return sourceTextDecoder.decode(buffer);
+  } catch {
+    return '';
+  }
 }
 
 function wrapText(text, maxLength) {
