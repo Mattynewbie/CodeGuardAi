@@ -418,6 +418,8 @@ export async function fetchDashboardData({ user } = {}) {
       id: project.id,
       title: project.title,
       owner: submissionStudentName(project, project.users),
+      uploadedBy: uploaderAccountName(project, project.users),
+      uploadedByEmail: uploaderAccountEmail(project, project.users),
       createdAt: project.created_at,
       files: project.extracted_code_files?.length || 0,
       highestSimilarity: Number(project.highest_similarity || 0),
@@ -453,6 +455,9 @@ export async function fetchProjectList({ user } = {}) {
     id: project.id,
     title: project.title,
     owner: submissionStudentName(project, project.users),
+    uploadedBy: uploaderAccountName(project, project.users),
+    uploadedByEmail: uploaderAccountEmail(project, project.users),
+    uploadedById: project.owner_id,
     createdAt: project.created_at,
     files: project.extracted_code_files?.length || 0,
     highestSimilarity: Number(project.highest_similarity || 0),
@@ -1104,6 +1109,9 @@ function rememberLocalAnalysis({ user, uploadedFile, sourceDocuments, sourceSubm
     status: reports.length ? statusFromScore(analysis.projectScore || 0) : 'Indexed',
     language: summarizeLanguageText(sourceDocuments),
     reportId: reports[0]?.id || sourceSubmission.id,
+    uploadedBy: displayNameFromUser(user),
+    uploadedByEmail: user?.email || '',
+    uploadedById: user?.id || '',
   };
 
   localProjects.unshift(project);
@@ -1254,7 +1262,22 @@ function parseSubmissionMetadata(description) {
 
 function submissionStudentName(project, user) {
   const metadata = parseSubmissionMetadata(project?.description);
-  return metadata.studentName || user?.full_name || user?.email || project?.owner || 'Student';
+  const profile = firstProfile(user);
+  return metadata.studentName || profile?.full_name || profile?.email || project?.owner || 'Student';
+}
+
+function uploaderAccountName(project, user) {
+  const profile = firstProfile(user);
+  return profile?.full_name || profile?.email || project?.uploadedBy || project?.owner || 'Unknown account';
+}
+
+function uploaderAccountEmail(project, user) {
+  const profile = firstProfile(user);
+  return profile?.email || project?.uploadedByEmail || '';
+}
+
+function firstProfile(value) {
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function submissionDisplayName(project) {

@@ -2520,6 +2520,9 @@ function normalizeProjectFromApi(file, data) {
     id: data.project?.id || `api-${Date.now()}`,
     title: data.project?.title || file.name,
     owner: data.project?.owner || 'Current User',
+    uploadedBy: data.project?.uploadedBy || 'Current User',
+    uploadedByEmail: data.project?.uploadedByEmail || '',
+    uploadedById: data.project?.uploadedById || '',
     createdAt: new Date().toISOString().slice(0, 10),
     files: data.files?.length || data.project?.files || 1,
     highestSimilarity: score,
@@ -2635,11 +2638,12 @@ function buildSignalChartData(score) {
   ];
 }
 
-const projectSearchFields = ['title', 'owner', 'language', 'status', 'createdAt'];
+const projectSearchFields = ['title', 'owner', 'uploadedBy', 'uploadedByEmail', 'uploadedById', 'language', 'status', 'createdAt'];
 const projectSortOptions = [
   { key: 'createdAt', label: 'Newest upload', accessor: 'createdAt', type: 'date' },
   { key: 'title', label: 'Project name', accessor: 'title', type: 'string' },
   { key: 'owner', label: 'Owner', accessor: 'owner', type: 'string' },
+  { key: 'uploadedBy', label: 'Uploader', accessor: 'uploadedBy', type: 'string' },
   { key: 'highestSimilarity', label: 'Similarity score', accessor: 'highestSimilarity', type: 'number' },
   { key: 'status', label: 'Status', accessor: 'status', type: 'string' },
   { key: 'language', label: 'Language', accessor: 'language', type: 'string' },
@@ -3731,13 +3735,14 @@ function AdminDashboard({
             </div>
             <Shield size={22} />
           </div>
-          <TableControls table={projectTable} searchPlaceholder="Search project, owner, language, status, or date" />
+          <TableControls table={projectTable} searchPlaceholder="Search project, owner, uploader, email, language, status, or date" />
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Project</th>
-                  <th>Owner</th>
+                  <th>Student/Owner</th>
+                  <th>Uploaded By</th>
                   <th>Similarity</th>
                   <th>Actions</th>
                 </tr>
@@ -3750,6 +3755,11 @@ function AdminDashboard({
                       <span>{project.files} files</span>
                     </td>
                     <td>{project.owner}</td>
+                    <td className="uploader-cell">
+                      <strong title={project.uploadedBy || 'Unknown account'}>{project.uploadedBy || 'Unknown account'}</strong>
+                      {project.uploadedByEmail && <span title={project.uploadedByEmail}>{project.uploadedByEmail}</span>}
+                      {project.uploadedById && <small title={project.uploadedById}>ID: {project.uploadedById}</small>}
+                    </td>
                     <td>
                       <ScoreBadge score={project.highestSimilarity} />
                     </td>
@@ -3769,7 +3779,7 @@ function AdminDashboard({
                 ))}
                 {projectTable.filteredCount === 0 && (
                   <tr>
-                    <td colSpan={4}>
+                    <td colSpan={5}>
                       {projects.length ? 'No projects match your search.' : 'No uploaded projects yet.'}
                     </td>
                   </tr>

@@ -1300,6 +1300,29 @@ td span {
   font-size: 0.86rem;
 }
 
+.uploader-cell {
+  min-width: 220px;
+}
+
+.uploader-cell strong,
+.uploader-cell span,
+.uploader-cell small {
+  display: block;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploader-cell strong {
+  color: var(--ink);
+}
+
+.uploader-cell small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .score-badge,
 .status {
   display: inline-flex;
