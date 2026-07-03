@@ -734,7 +734,17 @@ async function enrichReportEvidence(report) {
   if (Array.isArray(report.matchedSections) && report.matchedSections.length > 0) {
     const repaired = await repairNormalizedMatchedSections(report);
     const filtered = filterBoilerplateOnlyMatchedSections(repaired);
-    if (filtered.matchedSections?.length) return recalibrateReportFromMatchedSections(filtered);
+    if (filtered.matchedSections?.length) {
+      const rebuiltExactSections = await rebuildExactFullFileSectionsIfNeeded(filtered);
+      if (rebuiltExactSections?.length) {
+        return recalibrateReportFromMatchedSections({
+          ...filtered,
+          matchedSections: rebuiltExactSections,
+        });
+      }
+
+      return recalibrateReportFromMatchedSections(filtered);
+    }
 
     const rebuiltSections = await buildEvidenceSectionsFromPairs(report);
     if (rebuiltSections.length) {
@@ -768,8 +778,9 @@ async function buildEvidenceSectionsFromPairs(report) {
     const evidence = await loadEvidenceDocumentsForPair(report, pair);
     if (!evidence?.source || !evidence?.compared) continue;
 
-    const sourceBlock = await storedSnippetBlock(evidence.source);
-    const comparedBlock = await storedSnippetBlock(evidence.compared);
+    const fullFile = isExactFullFileEvidence(report, pair);
+    const sourceBlock = await storedSnippetBlock(evidence.source, { fullFile });
+    const comparedBlock = await storedSnippetBlock(evidence.compared, { fullFile });
     if (!sourceBlock || !comparedBlock) continue;
 
     sections.push({
@@ -782,11 +793,55 @@ async function buildEvidenceSectionsFromPairs(report) {
       sourceSnippet: sourceBlock.snippet,
       comparedSnippet: comparedBlock.snippet,
       confidence: Math.round(Number(pair.score || report.similarityScore || 0)),
-      matchType: String(pair.matchType || '').toLowerCase().includes('exact') ? 'copied_code' : 'similar_logic',
+      matchType: fullFile ? 'copied_full_file' : String(pair.matchType || '').toLowerCase().includes('exact') ? 'copied_code' : 'similar_logic',
     });
   }
 
   return sections;
+}
+
+async function rebuildExactFullFileSectionsIfNeeded(report) {
+  if (!shouldRebuildExactFullFileSections(report)) return [];
+  return buildEvidenceSectionsFromPairs(report);
+}
+
+function shouldRebuildExactFullFileSections(report) {
+  if (!Array.isArray(report.filePairs) || report.filePairs.length === 0) return false;
+  return report.filePairs.some((pair) => isExactFullFileEvidence(report, pair)) && hasShortLineOnlyEvidence(report);
+}
+
+function hasShortLineOnlyEvidence(report) {
+  return (report.matchedSections || []).every((section) => {
+    const sourceLines = parseLineRange(section.sourceLines);
+    const comparedLines = parseLineRange(section.comparedLines);
+    return sourceLines <= 1 && comparedLines <= 1;
+  });
+}
+
+function parseLineRange(value) {
+  const [start, end] = String(value || '')
+    .split('-')
+    .map((part) => Number.parseInt(part, 10));
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 1;
+  return Math.max(1, end - start + 1);
+}
+
+function isExactFullFileEvidence(report, pair = {}) {
+  const matchType = String(pair.matchType || '').toLowerCase();
+  const explanation = String(pair.explanation || '').toLowerCase();
+  const pairScore = Number(pair.score || 0);
+  const reportScore = Number(report.similarityScore || 0);
+  const exactScore = Number(report.exactMatchScore || pair.metrics?.exact || 0);
+
+  return (
+    (pairScore >= 99 || reportScore >= 99) &&
+    (exactScore >= 99 ||
+      matchType.includes('exact full-file') ||
+      matchType.includes('exact full file') ||
+      explanation.includes('exact full-file') ||
+      explanation.includes('exact full file'))
+  );
 }
 
 async function loadEvidenceDocumentsForPair(report, pair) {
@@ -1080,7 +1135,7 @@ function looksLikeNormalizedTokens(value) {
   return identifierTokens.length >= 3 || (identifierTokens.length >= 1 && numberTokens.length >= 1);
 }
 
-async function storedSnippetBlock(row) {
+async function storedSnippetBlock(row, { fullFile = false } = {}) {
   const text = String(row?.metrics?.rawCode || (await loadOriginalCodeFromStorage(row)) || row?.normalized_code || '').trim();
   if (!text) return null;
 
@@ -1088,26 +1143,27 @@ async function storedSnippetBlock(row) {
   const entries = sourceLines
     .map((line, index) => ({
       lineNumber: index + 1,
-      text: line.trim(),
+      text: line.replace(/[ \t]+$/g, ''),
     }))
-    .filter((line) => line.text)
+    .filter((line) => line.text.trim())
     .filter(
       (line) =>
         !isCommonHtmlBoilerplateSnippet(line.text, {
           filePath: row?.file_path,
           language: row?.language,
         }),
-    )
-    .slice(0, 12);
+    );
 
-  if (!entries.length) return null;
+  const visibleEntries = fullFile ? entries : entries.slice(0, 12);
 
-  const firstLine = entries[0].lineNumber;
-  const lastLine = entries[entries.length - 1].lineNumber;
+  if (!visibleEntries.length) return null;
+
+  const firstLine = visibleEntries[0].lineNumber;
+  const lastLine = visibleEntries[visibleEntries.length - 1].lineNumber;
 
   return {
     lines: `${firstLine}-${lastLine}`,
-    snippet: entries.map((line) => line.text).join('\n'),
+    snippet: visibleEntries.map((line) => line.text).join('\n'),
   };
 }
 

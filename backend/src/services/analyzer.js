@@ -182,7 +182,7 @@ async function compareSubmissionPair(sourceDocuments, comparedDocuments, { sourc
 
       const semanticScore = await semanticSimilarity(sourceDocument, comparedDocument);
       const finalScore = combineScores(metrics, semanticScore);
-      const pairMatches = findMatchedSections(sourceDocument, comparedDocument, finalScore);
+      const pairMatches = findMatchedSections(sourceDocument, comparedDocument, finalScore, metrics);
       const renameHints = findRenamedVariables(sourceDocument, comparedDocument, metrics);
 
       filePairs.push({
@@ -1240,9 +1240,19 @@ function levenshtein(a, b) {
   return previous[b.length];
 }
 
-function findMatchedSections(documentA, documentB, finalScore) {
+function findMatchedSections(documentA, documentB, finalScore, metrics = {}) {
   const sourceLines = normalizeLines(documentA.rawText, documentA);
   const comparedLines = normalizeLines(documentB.rawText, documentB);
+  const exactFullFile =
+    metrics.exactFullContentScore >= 0.98 ||
+    metrics.exactLineScore >= 0.98 ||
+    (finalScore >= 0.995 && metrics.exactScore >= 0.98);
+
+  if (exactFullFile) {
+    const fullMatch = makeFullFileBlockMatch(documentA, documentB, sourceLines, comparedLines, finalScore);
+    if (fullMatch) return [fullMatch];
+  }
+
   const matches = [];
 
   for (let sourceIndex = 0; sourceIndex < sourceLines.length; sourceIndex += 1) {
@@ -1350,6 +1360,43 @@ function findClosestLineMatches(sourceLines, comparedLines, finalScore, document
   }
 
   return matches;
+}
+
+function makeFullFileBlockMatch(documentA, documentB, sourceLines, comparedLines, finalScore) {
+  const sourceBlock = fullCodeBlock(sourceLines);
+  const comparedBlock = fullCodeBlock(comparedLines);
+
+  if (!sourceBlock || !comparedBlock) return null;
+
+  return {
+    sourceFileId: documentA.id,
+    comparedFileId: documentB.id,
+    sourceFile: documentA.filePath,
+    comparedFile: documentB.filePath,
+    sourceLines: `${sourceBlock.startLine}-${sourceBlock.endLine}`,
+    comparedLines: `${comparedBlock.startLine}-${comparedBlock.endLine}`,
+    sourceSnippet: sourceBlock.snippet,
+    comparedSnippet: comparedBlock.snippet,
+    confidence: Math.round(finalScore * 100),
+    matchType: 'copied_full_file',
+  };
+}
+
+function fullCodeBlock(lines) {
+  const firstIndex = lines.findIndex((line) => !line.isBoilerplate && line.original.trim().length > 0);
+  const lastIndex = lines.findLastIndex((line) => !line.isBoilerplate && line.original.trim().length > 0);
+
+  if (firstIndex < 0 || lastIndex < firstIndex) return null;
+
+  const blockLines = lines.slice(firstIndex, lastIndex + 1).filter((line) => !line.isBoilerplate);
+  const snippet = blockLines.map((line) => line.original).join('\n').trimEnd();
+  if (!snippet.trim()) return null;
+
+  return {
+    startLine: blockLines[0].lineNumber,
+    endLine: blockLines[blockLines.length - 1].lineNumber,
+    snippet,
+  };
 }
 
 function makeRepresentativeBlockMatch(documentA, documentB, sourceLines, comparedLines, finalScore) {

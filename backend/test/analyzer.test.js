@@ -212,7 +212,7 @@ test('adds block highlights for exact copied files without token-heavy lines', a
 
   assert.equal(analysis.comparisons[0].filePairs[0].score, 100);
   assert.ok(analysis.comparisons[0].matchedSections.length > 0);
-  assert.equal(analysis.comparisons[0].matchedSections[0].matchType, 'copied_code');
+  assert.equal(analysis.comparisons[0].matchedSections[0].matchType, 'copied_full_file');
   assert.match(analysis.comparisons[0].matchedSections[0].sourceSnippet, /onehatBomber/);
 });
 
@@ -260,6 +260,54 @@ test('returns 100 for exact full-file HTML match after whitespace normalization'
   assert.equal(analysis.projectScore, 100);
   assert.equal(analysis.comparisons[0].filePairs[0].score, 100);
   assert.equal(analysis.comparisons[0].filePairs[0].matchType, 'Exact full-file match');
+});
+
+test('shows a full-file evidence block for exact copied PHP files', async () => {
+  const php = `<?php
+require_once __DIR__ . '/config/init.php';
+
+if (!isLoggedIn()) {
+  redirect('/login.php');
+}
+
+if (isAdmin()) {
+  redirect('/admin/dashboard.php');
+}
+
+renderPage('subscribe');`;
+
+  const source = toSourceDocument({
+    projectId: 'submission-b',
+    ownerId: 'u',
+    filePath: 'subscribe.php',
+    language: 'PHP',
+    sizeBytes: php.length,
+    sha256: 'php-source',
+    rawText: php,
+  });
+
+  const previous = toSourceDocument({
+    projectId: 'submission-a',
+    projectTitle: 'Submission A',
+    ownerId: 'u',
+    filePath: 'subscribe.php',
+    language: 'PHP',
+    sizeBytes: php.length,
+    sha256: 'php-previous',
+    rawText: php,
+  });
+
+  const analysis = await analyzeSubmission([source], [previous], {
+    sourceSubmission: { id: 'submission-b', title: 'Submission B' },
+  });
+
+  const sections = analysis.comparisons[0].matchedSections;
+  assert.equal(analysis.projectScore, 100);
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].sourceLines, '1-12');
+  assert.match(sections[0].sourceSnippet, /require_once/);
+  assert.match(sections[0].sourceSnippet, /if \(isAdmin\(\)\)/);
+  assert.match(sections[0].sourceSnippet, /renderPage\('subscribe'\)/);
 });
 
 test('prioritizes high token overlap for very short HTML files', () => {
