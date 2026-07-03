@@ -8,6 +8,20 @@ const tokenPattern =
   /[A-Za-z_$][\w$]*|\d+(?:\.\d+)?|==={0,1}|!==|!=|<=|>=|=>|[-+*/%=&|!<>^~?:;.,()[\]{}]/g;
 
 const identifierPattern = /^[A-Za-z_$][\w$]*$/;
+const htmlBoilerplateTitlePattern = /^<\/?title>$|^<title>\s*<\/title>$/i;
+const htmlBoilerplateLinkPattern = /^<link\s+rel=["']?stylesheet["']?\s+href=(["'])\1\s*>$/i;
+const htmlBoilerplateScriptPattern = /^<script\s+src=(["'])\1\s*>\s*<\/script>$/i;
+const htmlBoilerplateLinePatterns = [
+  /^<!doctype\s+html>$/i,
+  /^<html(?:\s+lang=["']?en["']?)?>$/i,
+  /^<\/html>$/i,
+  /^<head>$/i,
+  /^<\/head>$/i,
+  /^<body>$/i,
+  /^<\/body>$/i,
+  /^<meta\s+charset=["']?utf-8["']?\s*\/?>$/i,
+  /^<meta\s+name=["']viewport["']\s+content=["']width=device-width,\s*initial-scale=1\.0["']\s*\/?>$/i,
+];
 const namingStyleKeys = ['camelCase', 'snake_case', 'PascalCase', 'UPPER_CASE', 'lowercase', 'mixed'];
 const styleSignalWeights = {
   variableNaming: 0.14,
@@ -75,7 +89,8 @@ const reserved = new Set([
 ]);
 
 export function toSourceDocument(file) {
-  const withoutComments = stripComments(file.rawText);
+  const analysisText = removeCommonBoilerplateLines(file.rawText, file);
+  const withoutComments = stripComments(analysisText);
   const rawTokens = tokenize(withoutComments);
   const normalizedTokens = normalizeTokens(rawTokens);
   const normalizedText = normalizedTokens.join(' ');
@@ -153,13 +168,17 @@ async function compareSubmissionPair(sourceDocuments, comparedDocuments, { sourc
   const filePairs = [];
   const matchedSections = [];
   const renamedVariables = [];
+  let boilerplateOnlyMatches = 0;
 
   for (const sourceDocument of sourceDocuments) {
     for (const comparedDocument of comparedDocuments) {
       if (sourceDocument.projectId === comparedDocument.projectId) continue;
 
       const metrics = compareDocuments(sourceDocument, comparedDocument);
-      if (metrics.combinedScore < 0.35) continue;
+      if (metrics.combinedScore < 0.35) {
+        if (hasCommonHtmlBoilerplateOverlap(sourceDocument, comparedDocument)) boilerplateOnlyMatches += 1;
+        continue;
+      }
 
       const semanticScore = await semanticSimilarity(sourceDocument, comparedDocument);
       const finalScore = combineScores(metrics, semanticScore);
@@ -194,6 +213,7 @@ async function compareSubmissionPair(sourceDocuments, comparedDocuments, { sourc
     sourceSubmission,
     comparedSubmission: comparedSubmission?.submission || comparedSubmission,
     projectScore,
+    boilerplateOnlyMatch: sortedPairs.length === 0 && boilerplateOnlyMatches > 0,
     metrics: pairMetrics,
     filePairs: sortedPairs,
     matchedSections: matchedSections.slice(0, 12),
@@ -864,6 +884,7 @@ function aggregatePairMetrics(filePairs) {
 }
 
 export function compareDocuments(documentA, documentB) {
+  const hasMeaningfulContent = hasMeaningfulComparableContent(documentA) || hasMeaningfulComparableContent(documentB);
   const exactFullContentScore = exactFullContentMatch(documentA, documentB) ? 1 : 0;
   const exactLineScore = exactLineMatch(documentA, documentB) ? 1 : 0;
   if (exactFullContentScore || exactLineScore) {
@@ -871,8 +892,9 @@ export function compareDocuments(documentA, documentB) {
   }
 
   const exactScore =
-    documentA.contentSha256 === documentB.contentSha256 ||
-    documentA.normalizedSha256 === documentB.normalizedSha256
+    hasMeaningfulContent &&
+    (documentA.contentSha256 === documentB.contentSha256 ||
+      documentA.normalizedSha256 === documentB.normalizedSha256)
       ? 1
       : 0;
   const rawTokenScore = cosineSimilarity(documentA.rawTokens, documentB.rawTokens);
@@ -961,6 +983,7 @@ function normalizeTokens(tokens) {
 }
 
 function createFingerprints(tokens, windowSize = 7) {
+  if (!tokens.length) return new Set();
   if (tokens.length < windowSize) return new Set([sha256(tokens.join(' ')).slice(0, 16)]);
   const fingerprints = new Set();
 
@@ -1070,12 +1093,14 @@ function makeExactDocumentMetrics({ exactFullContentScore = 1, exactLineScore = 
 }
 
 function exactFullContentMatch(documentA, documentB) {
+  if (!hasMeaningfulComparableContent(documentA) && !hasMeaningfulComparableContent(documentB)) return false;
   const first = normalizeFullContent(documentA.rawText || documentA.normalizedText);
   const second = normalizeFullContent(documentB.rawText || documentB.normalizedText);
   return Boolean(first && second && first === second);
 }
 
 function exactLineMatch(documentA, documentB) {
+  if (!hasMeaningfulComparableContent(documentA) && !hasMeaningfulComparableContent(documentB)) return false;
   const first = normalizeComparableLines(documentA.rawText || documentA.normalizedText);
   const second = normalizeComparableLines(documentB.rawText || documentB.normalizedText);
   if (!first.length || first.length !== second.length) return false;
@@ -1098,6 +1123,58 @@ function normalizeComparableLines(source) {
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function hasMeaningfulComparableContent(document) {
+  return removeCommonBoilerplateLines(document.rawText || document.normalizedText, document).trim().length > 0;
+}
+
+function removeCommonBoilerplateLines(source, file = {}) {
+  if (!isHtmlLikeFile(file)) return String(source || '');
+
+  return String(source || '')
+    .split(/\r?\n/)
+    .filter((line) => !isCommonHtmlBoilerplateLine(line))
+    .join('\n');
+}
+
+function hasCommonHtmlBoilerplateOverlap(documentA, documentB) {
+  if (!isHtmlLikeFile(documentA) || !isHtmlLikeFile(documentB)) return false;
+  const first = new Set(getCommonHtmlBoilerplateLines(documentA.rawText || documentA.normalizedText));
+  if (!first.size) return false;
+  return getCommonHtmlBoilerplateLines(documentB.rawText || documentB.normalizedText).some((line) => first.has(line));
+}
+
+function getCommonHtmlBoilerplateLines(source) {
+  return String(source || '')
+    .split(/\r?\n/)
+    .map((line) => normalizeHtmlBoilerplateLine(line))
+    .filter((line) => line && isCommonHtmlBoilerplateLine(line));
+}
+
+function isHtmlLikeFile(file = {}) {
+  const language = String(file.language || '').toLowerCase();
+  const filePath = String(file.filePath || '').toLowerCase();
+  return language.includes('html') || filePath.endsWith('.html') || filePath.endsWith('.htm');
+}
+
+function isCommonHtmlBoilerplateLine(line) {
+  const normalized = normalizeHtmlBoilerplateLine(line);
+  if (!normalized) return false;
+  if (htmlBoilerplateLinePatterns.some((pattern) => pattern.test(normalized))) return true;
+  if (htmlBoilerplateTitlePattern.test(normalized)) return true;
+  if (htmlBoilerplateLinkPattern.test(normalized)) return true;
+  if (htmlBoilerplateScriptPattern.test(normalized)) return true;
+  return false;
+}
+
+function normalizeHtmlBoilerplateLine(line) {
+  return String(line || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s*=\s*/g, '=')
+    .replace(/\s*\/>$/g, '>')
+    .toLowerCase();
 }
 
 function calculateNearDuplicateScore({ tokenScore, fingerprintScore, structureScore, stringScore }) {
@@ -1153,16 +1230,17 @@ function levenshtein(a, b) {
 }
 
 function findMatchedSections(documentA, documentB, finalScore) {
-  const sourceLines = normalizeLines(documentA.rawText);
-  const comparedLines = normalizeLines(documentB.rawText);
+  const sourceLines = normalizeLines(documentA.rawText, documentA);
+  const comparedLines = normalizeLines(documentB.rawText, documentB);
   const matches = [];
 
   for (let sourceIndex = 0; sourceIndex < sourceLines.length; sourceIndex += 1) {
     const sourceLine = sourceLines[sourceIndex];
+    if (sourceLine.isBoilerplate) continue;
     if (!sourceLine.normalized || sourceLine.normalized.length < 12) continue;
 
     const comparedIndex = comparedLines.findIndex(
-      (line) => line.normalized === sourceLine.normalized && line.normalized.length >= 12,
+      (line) => !line.isBoilerplate && line.normalized === sourceLine.normalized && line.normalized.length >= 12,
     );
 
     if (comparedIndex === -1) continue;
@@ -1196,7 +1274,7 @@ function findMatchedSections(documentA, documentB, finalScore) {
   return matches;
 }
 
-function normalizeLines(source) {
+function normalizeLines(source, document = {}) {
   return source.split(/\r?\n/).map((line, index) => {
     const normalizedTokens = normalizeTokens(tokenize(stripComments(line)));
     return {
@@ -1204,16 +1282,17 @@ function normalizeLines(source) {
       original: line,
       normalizedTokens,
       normalized: normalizedTokens.join(' '),
+      isBoilerplate: isHtmlLikeFile(document) && isCommonHtmlBoilerplateLine(line),
     };
   });
 }
 
 function findClosestLineMatches(sourceLines, comparedLines, finalScore, documentA, documentB) {
   const sourceCandidates = sourceLines
-    .filter((line) => line.normalized.length >= 12 && line.normalizedTokens.length >= 3)
+    .filter((line) => !line.isBoilerplate && line.normalized.length >= 12 && line.normalizedTokens.length >= 3)
     .slice(0, 220);
   const comparedCandidates = comparedLines
-    .filter((line) => line.normalized.length >= 12 && line.normalizedTokens.length >= 3)
+    .filter((line) => !line.isBoilerplate && line.normalized.length >= 12 && line.normalizedTokens.length >= 3)
     .slice(0, 220);
   const candidates = [];
 
@@ -1283,8 +1362,8 @@ function makeRepresentativeBlockMatch(documentA, documentB, sourceLines, compare
 }
 
 function firstCodeBlock(lines) {
-  const preferredIndex = lines.findIndex((line) => line.normalizedTokens.length > 0);
-  const fallbackIndex = lines.findIndex((line) => line.original.trim().length > 0);
+  const preferredIndex = lines.findIndex((line) => !line.isBoilerplate && line.normalizedTokens.length > 0);
+  const fallbackIndex = lines.findIndex((line) => !line.isBoilerplate && line.original.trim().length > 0);
   const startIndex = preferredIndex >= 0 ? preferredIndex : fallbackIndex;
 
   if (startIndex < 0) return null;

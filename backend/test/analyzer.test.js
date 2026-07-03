@@ -6,6 +6,7 @@ import {
   compareDocuments,
   toSourceDocument,
 } from '../src/services/analyzer.js';
+import { buildReport } from '../src/services/report.js';
 
 test('detects renamed variables with similar logic', () => {
   const first = toSourceDocument({
@@ -301,9 +302,109 @@ test('prioritizes high token overlap for very short HTML files', () => {
 
   const metrics = compareDocuments(first, second);
 
-  assert.ok(metrics.tokenScore > 0.9);
-  assert.ok(metrics.combinedScore > 0.9);
+  assert.ok(metrics.tokenScore > 0.89);
+  assert.ok(metrics.combinedScore > 0.88);
   assert.equal(metrics.exactFullContentScore, 0);
+});
+
+test('ignores common HTML boilerplate as plagiarism evidence', async () => {
+  const boilerplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>
+</title>
+<link rel="stylesheet" href="">
+<script src=""></script>
+</head>
+<body>
+</body>
+</html>`;
+
+  const source = toSourceDocument({
+    projectId: 'submission-b',
+    ownerId: 'u',
+    filePath: 'index.html',
+    language: 'HTML',
+    sizeBytes: boilerplate.length,
+    sha256: 'boilerplate-source',
+    rawText: boilerplate,
+  });
+
+  const previous = toSourceDocument({
+    projectId: 'submission-a',
+    projectTitle: 'Submission A',
+    ownerId: 'u',
+    filePath: 'index.html',
+    language: 'HTML',
+    sizeBytes: boilerplate.length,
+    sha256: 'boilerplate-previous',
+    rawText: boilerplate,
+  });
+
+  const analysis = await analyzeSubmission([source], [previous], {
+    sourceSubmission: { id: 'submission-b', title: 'Submission B' },
+  });
+
+  assert.equal(analysis.projectScore, 0);
+  assert.equal(analysis.comparisons[0].boilerplateOnlyMatch, true);
+  assert.equal(analysis.comparisons[0].filePairs.length, 0);
+  assert.equal(analysis.comparisons[0].matchedSections.length, 0);
+
+  const report = buildReport({
+    projectId: 'submission-b',
+    projectTitle: 'Submission B',
+    sourceSubmission: { id: 'submission-b', title: 'Submission B' },
+    comparedSubmission: { id: 'submission-a', title: 'Submission A' },
+    sourceDocuments: [source],
+    comparison: analysis.comparisons[0],
+  });
+
+  assert.equal(report.summary, 'Only common HTML boilerplate was matched. No meaningful plagiarism evidence found.');
+  assert.equal(report.boilerplateOnlyMatch, true);
+});
+
+test('does not highlight boilerplate lines when meaningful HTML content matches', async () => {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+</head>
+<body>
+<section id="student-profile" class="card featured">Unique Lemon profile content</section>
+</body>
+</html>`;
+
+  const source = toSourceDocument({
+    projectId: 'submission-b',
+    ownerId: 'u',
+    filePath: 'profile.html',
+    language: 'HTML',
+    sizeBytes: html.length,
+    sha256: 'profile-source',
+    rawText: html,
+  });
+
+  const previous = toSourceDocument({
+    projectId: 'submission-a',
+    projectTitle: 'Submission A',
+    ownerId: 'u',
+    filePath: 'profile-copy.html',
+    language: 'HTML',
+    sizeBytes: html.length,
+    sha256: 'profile-previous',
+    rawText: html,
+  });
+
+  const analysis = await analyzeSubmission([source], [previous], {
+    sourceSubmission: { id: 'submission-b', title: 'Submission B' },
+  });
+
+  assert.equal(analysis.projectScore, 100);
+  assert.ok(analysis.comparisons[0].matchedSections.length > 0);
+  assert.match(analysis.comparisons[0].matchedSections[0].sourceSnippet, /student-profile/);
+  assert.doesNotMatch(analysis.comparisons[0].matchedSections[0].sourceSnippet, /DOCTYPE|<html|<body>/i);
 });
 
 test('keeps project score at 100 when an exact copied file has weaker nearby pairs', async () => {

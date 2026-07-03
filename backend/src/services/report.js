@@ -43,8 +43,11 @@ export function buildReport({
       detected: (comparison.renamedVariables || []).length > 0 || Number(comparison.metrics?.variableRename || 0) > 0,
       score: comparison.metrics?.variableRename || 0,
     },
+    boilerplateOnlyMatch: Boolean(comparison.boilerplateOnlyMatch),
     generatedAt: new Date().toISOString(),
-    summary: buildSummary(similarityScore, comparison.filePairs.length, source, compared),
+    summary: buildSummary(similarityScore, comparison.filePairs.length, source, compared, {
+      boilerplateOnlyMatch: comparison.boilerplateOnlyMatch,
+    }),
     chartData: buildChartData(comparison.filePairs),
     filePairs: comparison.filePairs.map((pair) => ({
       sourceId: pair.sourceId,
@@ -103,8 +106,12 @@ export function buildWaitingReport({ projectId, projectTitle, sourceSubmission, 
   };
 }
 
-function buildSummary(score, pairCount, source, compared) {
+function buildSummary(score, pairCount, source, compared, { boilerplateOnlyMatch = false } = {}) {
   const pairLabel = `${source.title} vs ${compared.title}`;
+
+  if (boilerplateOnlyMatch) {
+    return 'Only common HTML boilerplate was matched. No meaningful plagiarism evidence found.';
+  }
 
   if (score >= 80) {
     return `High similarity detected for ${pairLabel}. ${pairCount} suspicious cross-submission file pair(s) should be reviewed for copied code, renamed identifiers, and matching logic flow.`;
