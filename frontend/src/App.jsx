@@ -3696,6 +3696,7 @@ function AdminDashboard({
     event.preventDefault();
     setUserMessage('');
     setCreatingUser(true);
+    const createdRoleLabel = newUser.role === 'admin' ? 'Admin' : 'Professor';
 
     try {
       await onCreateUser(newUser);
@@ -3709,7 +3710,7 @@ function AdminDashboard({
         role: 'user',
       });
       setSelectedAccessRequestId('');
-      setUserMessage('Professor account created. The user can sign in with the assigned temporary password.');
+      setUserMessage(`${createdRoleLabel} account created. The user can sign in with the assigned temporary password.`);
     } catch (error) {
       setUserMessage(error.message || 'Unable to create user.');
     } finally {
