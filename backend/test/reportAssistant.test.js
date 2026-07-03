@@ -120,6 +120,27 @@ test('returns an advisory report-grounded answer when AI runtime is unavailable 
   assert.match(response.answer, new RegExp(REPORT_ASSISTANT_DISCLAIMER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
+test('varies fallback answers for repeated report questions', async () => {
+  const first = await answerReportQuestion({
+    report: sampleReport,
+    message: 'Explain the similarity score.',
+  });
+  const second = await answerReportQuestion({
+    report: sampleReport,
+    message: 'Explain the similarity score.',
+    history: [
+      { role: 'user', content: 'Explain the similarity score.' },
+      { role: 'assistant', content: first.answer },
+    ],
+  });
+
+  assert.equal(first.usedAi, false);
+  assert.equal(second.usedAi, false);
+  assert.notEqual(first.answer, second.answer);
+  assert.match(second.answer, /strongest pair|Different angle|Practical read|Focus first/i);
+  assert.match(second.answer, new RegExp(REPORT_ASSISTANT_DISCLAIMER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
 test('sends report context to messages-based chat APIs', async () => {
   const originalFetch = globalThis.fetch;
   const originalUrl = config.aiChatApiUrl;

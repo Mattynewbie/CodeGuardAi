@@ -86,7 +86,7 @@ export async function answerReportQuestion({ report, message, action, history })
     assistantRuntime.lastError = error.message;
 
     return {
-      answer: withDisclaimer(buildExtractiveFallbackAnswer(prompt, context)),
+      answer: withDisclaimer(buildExtractiveFallbackAnswer(prompt, context, conversationHistory)),
       provider: assistantRuntime.fallback,
       model: 'report-context-rules',
       reportId: report.id,
@@ -317,6 +317,7 @@ function buildSystemInstruction() {
     'If the question is unrelated to the current report, say you can only answer questions about this report.',
     'Never make the final plagiarism decision and never accuse a student.',
     'Use clear, professional language for instructors.',
+    'If recent chat already contains a similar question, do not repeat the same answer; use a different angle, add report-specific details, or give the next practical review step.',
     `End every answer with this exact disclaimer: "${REPORT_ASSISTANT_DISCLAIMER}"`,
   ].join(' ');
 }
@@ -387,7 +388,7 @@ function renderContextAsText(context) {
   return clipText(lines.join('\n'), 9000);
 }
 
-function buildExtractiveFallbackAnswer(prompt, context) {
+function buildExtractiveFallbackAnswer(prompt, context, history = []) {
   const lowerPrompt = prompt.toLowerCase();
   const asksForScoreReason =
     lowerPrompt.includes('score') ||
@@ -418,6 +419,25 @@ function buildExtractiveFallbackAnswer(prompt, context) {
     lowerPrompt.includes('hatol') ||
     lowerPrompt.includes('ano gagawin') ||
     lowerPrompt.includes('anong gagawin');
+  const intent = asksForDecision
+    ? 'decision'
+    : asksWhatToReview
+      ? 'review'
+      : asksForScoreReason
+        ? 'score'
+        : lowerPrompt.includes('highlight')
+          ? 'highlights'
+          : lowerPrompt.includes('variable') || lowerPrompt.includes('renamed')
+            ? 'variables'
+            : lowerPrompt.includes('note')
+              ? 'notes'
+              : 'summary';
+  const variation = getFallbackVariation(prompt, history, intent);
+
+  if (variation.repeated) {
+    const alternateAnswer = buildNonRedundantFallbackAnswer(prompt, context, intent, variation);
+    if (alternateAnswer) return alternateAnswer;
+  }
 
   if (Number(context.scores.overallSimilarity || 0) === 0 && asksForScoreReason) {
     return buildZeroSimilarityAnswer(prompt, context);
@@ -466,6 +486,214 @@ function buildExtractiveFallbackAnswer(prompt, context) {
   }
 
   return `Report summary: ${context.submissionA.title} was compared with ${context.submissionB.title}. The overall similarity score is ${context.scores.overallSimilarity}%. The report includes ${context.suspiciousFilePairs.length} suspicious file pair(s), ${context.highlightedCodeSections.length} highlighted code section(s), and ${context.renamedVariables.length} variable rename indicator(s).`;
+}
+
+function getFallbackVariation(prompt, history = [], intent = 'summary') {
+  const cleanPrompt = normalizeRepeatText(prompt);
+  const samePromptCount = history.filter(
+    (item) => item.role === 'user' && normalizeRepeatText(item.content) === cleanPrompt,
+  ).length;
+  const sameIntentCount = history.filter(
+    (item) => item.role === 'user' && inferPromptIntent(item.content) === intent,
+  ).length;
+  const assistantTurns = history.filter((item) => item.role === 'assistant').length;
+
+  return {
+    repeated: samePromptCount > 0 || sameIntentCount > 0,
+    variant: (samePromptCount + sameIntentCount + assistantTurns) % 3,
+  };
+}
+
+function buildNonRedundantFallbackAnswer(prompt, context, intent, variation) {
+  if (intent === 'score') return buildScoreAnswerVariant(prompt, context, variation.variant);
+  if (intent === 'review') return buildReviewAnswerVariant(prompt, context, variation.variant);
+  if (intent === 'decision') return buildDecisionAnswerVariant(prompt, context, variation.variant);
+  if (intent === 'highlights') return buildHighlightAnswerVariant(prompt, context, variation.variant);
+  if (intent === 'variables') return buildVariableAnswerVariant(prompt, context, variation.variant);
+  if (intent === 'notes') return buildNotesAnswerVariant(prompt, context, variation.variant);
+  return buildSummaryAnswerVariant(prompt, context, variation.variant);
+}
+
+function buildScoreAnswerVariant(prompt, context, variant) {
+  const filipino = isLikelyFilipinoPrompt(prompt);
+  const score = Number(context.scores.overallSimilarity || 0);
+  const strongestPair = context.suspiciousFilePairs[0];
+  const fileLabel = comparedFileLabel(context);
+  const extensionNote = comparedExtensionNote(fileLabel);
+
+  if (score === 0) {
+    if (filipino) {
+      const answers = [
+        `Ibang paliwanag: 0% ito dahil walang file pair, line highlight, o rename evidence na pumasa sa suspicious threshold. Hindi ibig sabihin na walang kahit anong common syntax; ibig sabihin walang meaningful code similarity evidence ang report.`,
+        `Direct answer: oo, sa report na ito walang detectable suspicious pagkakaparehas. Ang retained evidence ay file pairs ${context.suspiciousFilePairs.length}, highlights ${context.highlightedCodeSections.length}, renamed variables ${context.renamedVariables.length}. ${extensionNote}`,
+        `Practical check: siguraduhin muna na original source files ang in-upload. Kung tama ang files at 0% pa rin, wala kang report evidence na kailangang i-flag para sa copying sa comparison na ito.`,
+      ];
+      return answers[variant];
+    }
+
+    const answers = [
+      `Another way to read the 0% score: the scan found no retained suspicious file pair, no highlighted matching section, and no rename evidence. Common syntax may still exist, but nothing rose to reportable similarity.`,
+      `Direct answer: yes, this report has no detectable meaningful similarity evidence. Current retained evidence is ${context.suspiciousFilePairs.length} file pairs, ${context.highlightedCodeSections.length} highlights, and ${context.renamedVariables.length} rename indicators. ${extensionNote}`,
+      `Practical next step: confirm the uploaded files are the original source files. If they are correct, this 0% report gives you no similarity evidence to flag for this comparison.`,
+    ];
+    return answers[variant];
+  }
+
+  if (filipino) {
+    const answers = [
+      `Ibang angle: ${score}% ang score dahil pinagsama ng report ang exact ${context.scores.exactMatch}%, structure ${context.scores.structuralSimilarity}%, semantic ${context.scores.semanticSimilarity}%, at renamed-variable ${context.scores.variableRename}% signals.`,
+      strongestPair
+        ? `Pinakamahalagang tingnan ngayon ang ${strongestPair.source} vs ${strongestPair.compared}: ${strongestPair.score}% (${strongestPair.matchType}). Dito manggagaling ang strongest evidence, hindi sa overall number lang.`
+        : `Walang retained suspicious file pair kahit may ${score}% score, kaya i-check kung summary-only or incomplete ang report data bago gumawa ng decision.`,
+      `Practical read: gamitin ang ${score}% bilang triage score. Unahin ang matched files/highlights, tapos i-confirm manually kung same logic ba talaga o normal/shared template lang.`,
+    ];
+    return answers[variant];
+  }
+
+  const answers = [
+    `Different angle: the ${score}% score comes from the combined signals: exact ${context.scores.exactMatch}%, structure ${context.scores.structuralSimilarity}%, semantic ${context.scores.semanticSimilarity}%, and renamed-variable ${context.scores.variableRename}%.`,
+    strongestPair
+      ? `Focus first on the strongest pair: ${strongestPair.source} vs ${strongestPair.compared} at ${strongestPair.score}% (${strongestPair.matchType}). That pair carries more review value than the overall number by itself.`
+      : `There is no retained suspicious file pair, so treat the ${score}% score as incomplete evidence until the report data is reviewed.`,
+    `Practical read: use ${score}% as a triage signal, then manually verify whether the matched files show copied logic or only normal/shared framework patterns.`,
+  ];
+  return answers[variant];
+}
+
+function buildReviewAnswerVariant(prompt, context, variant) {
+  const filipino = isLikelyFilipinoPrompt(prompt);
+  const strongestPair = context.suspiciousFilePairs[0];
+
+  if (filipino) {
+    const answers = [
+      `Unahin mong bantayan ang strongest file pair, highlighted sections, at renamed variables. Mas mabigat ang ebidensiya kapag pareho ang logic flow kahit nagpalit ng names o formatting.`,
+      strongestPair
+        ? `Specific na i-check: ${strongestPair.source} vs ${strongestPair.compared} (${strongestPair.score}%). Tingnan kung same sequence ng conditions, loops, function calls, at error handling.`
+        : `Sa report na ito, walang retained suspicious pair. Ang dapat mong bantayan ay kung tama ba ang upload; kung generated/wrong file ang na-scan, rerun gamit original source.`,
+      `Checklist: high pair score, exact blocks, same comments/errors, same control flow, renamed identifiers, at maraming matched sections. Kapag wala ang mga iyon, mas mahina ang evidence.`,
+    ];
+    return answers[variant];
+  }
+
+  const answers = [
+    `Review the strongest file pair, highlighted sections, and renamed variables first. The key risk is matching logic flow after superficial changes like names or formatting.`,
+    strongestPair
+      ? `Specific item to inspect: ${strongestPair.source} vs ${strongestPair.compared} (${strongestPair.score}%). Compare condition order, loops, function calls, and error handling.`
+      : `This report has no retained suspicious pair. First verify the uploaded files are correct; rerun with original source if generated or wrong files were scanned.`,
+    `Checklist: high pair score, exact blocks, matching comments/errors, same control flow, renamed identifiers, and repeated matched sections. Without those, the evidence is weaker.`,
+  ];
+  return answers[variant];
+}
+
+function buildDecisionAnswerVariant(prompt, context, variant) {
+  const filipino = isLikelyFilipinoPrompt(prompt);
+  const score = Number(context.scores.overallSimilarity || 0);
+
+  if (filipino) {
+    const answers = [
+      `Hindi dapat automatic ang final decision. Gamitin ang ${score}% at evidence bilang guide, tapos manual review pa rin ang basehan ng approve o resubmission.`,
+      score >= 70
+        ? `Dahil ${score}% ito, huwag muna i-approve nang walang manual review. Kung confirmed copied logic ang matched files, request resubmission ayon sa policy.`
+        : `Dahil ${score}% ito, puwedeng i-clear kung walang strong copied logic pagkatapos ng manual review. Kung mali ang upload, rerun muna.`,
+      `Recommended flow: check top pair, check highlights, check rename indicators, then decide. Ang tool ay evidence assistant, hindi automatic plagiarism judge.`,
+    ];
+    return answers[variant];
+  }
+
+  const answers = [
+    `Do not make the final decision automatically. Use the ${score}% score and evidence as guidance, then base approval or resubmission on manual review.`,
+    score >= 70
+      ? `Because this is ${score}%, do not approve it without manual review. If copied logic is confirmed, request resubmission according to your class policy.`
+      : `Because this is ${score}%, clearing it is reasonable only if manual review finds no strong copied logic. Rerun first if the upload was wrong.`,
+    `Recommended flow: inspect the top pair, check highlights, check rename indicators, then decide. The assistant provides evidence, not an automatic plagiarism judgment.`,
+  ];
+  return answers[variant];
+}
+
+function buildHighlightAnswerVariant(prompt, context, variant) {
+  const filipino = isLikelyFilipinoPrompt(prompt);
+  const section = context.highlightedCodeSections[0];
+  if (!section) {
+    return filipino
+      ? 'Walang highlighted code sections sa report na ito. Ibig sabihin walang line-level match na na-retain; tingnan muna ang file pairs at score signals.'
+      : 'There are no highlighted code sections in this report. That means no line-level match was retained; review file pairs and score signals first.';
+  }
+
+  const answers = [
+    `${section.sourceFile} lines ${section.sourceLines} vs ${section.comparedFile} lines ${section.comparedLines} is the first highlight to inspect because it has ${section.confidence}% confidence.`,
+    `Look at whether the highlighted blocks perform the same steps in the same order. Matching control flow matters more than identical spacing or variable names.`,
+    `After reviewing the first highlight, check whether the same pattern repeats elsewhere. Repeated highlighted logic is stronger evidence than one isolated small match.`,
+  ];
+  return answers[variant];
+}
+
+function buildVariableAnswerVariant(prompt, context, variant) {
+  const filipino = isLikelyFilipinoPrompt(prompt);
+  if (!context.renamedVariables.length) {
+    return filipino
+      ? 'Walang strong variable rename indicators sa report na ito. Kung may similarity pa rin, mas galing ito sa structure, exact blocks, o semantic logic kaysa renamed variables.'
+      : 'This report has no strong variable rename indicators. If similarity exists, it is coming more from structure, exact blocks, or semantic logic than renamed identifiers.';
+  }
+
+  const renameText = context.renamedVariables
+    .slice(0, 4)
+    .map((item) => `${item.from} -> ${item.to} (${item.confidence}%)`)
+    .join(', ');
+  const answers = [
+    `Rename indicators to inspect first: ${renameText}.`,
+    `A rename is suspicious only when the surrounding logic also matches. Compare the lines around these identifiers before deciding.`,
+    `Use rename evidence as supporting context, not standalone proof. It becomes stronger when paired with high structure or highlighted-section evidence.`,
+  ];
+  return answers[variant];
+}
+
+function buildNotesAnswerVariant(prompt, context, variant) {
+  const strongestPair = context.suspiciousFilePairs[0];
+  const answers = [
+    `Instructor note angle: overall score ${context.scores.overallSimilarity}%, exact ${context.scores.exactMatch}%, structure ${context.scores.structuralSimilarity}%, semantic ${context.scores.semanticSimilarity}%.`,
+    strongestPair
+      ? `Instructor note angle: prioritize ${strongestPair.source} vs ${strongestPair.compared} at ${strongestPair.score}% before reviewing lower-scoring evidence.`
+      : 'Instructor note angle: no suspicious file pair was retained, so verify upload correctness before making any report decision.',
+    `Instructor note angle: document what was manually checked, especially top file pairs, highlighted sections, renamed variables, and whether the uploaded files were original source files.`,
+  ];
+  return answers[variant];
+}
+
+function buildSummaryAnswerVariant(prompt, context, variant) {
+  const strongestPair = context.suspiciousFilePairs[0];
+  const answers = [
+    `${context.submissionA.title} vs ${context.submissionB.title}: ${context.scores.overallSimilarity}% overall similarity with ${context.suspiciousFilePairs.length} suspicious file pair(s), ${context.highlightedCodeSections.length} highlight(s), and ${context.renamedVariables.length} rename indicator(s).`,
+    strongestPair
+      ? `The shortest useful summary is the top pair: ${strongestPair.source} vs ${strongestPair.compared}, ${strongestPair.score}%, ${strongestPair.matchType}. Start review there.`
+      : `The shortest useful summary: this report has ${context.scores.overallSimilarity}% similarity and no retained suspicious file pair, so upload correctness and report completeness matter most.`,
+    `Evidence snapshot: exact ${context.scores.exactMatch}%, structure ${context.scores.structuralSimilarity}%, semantic ${context.scores.semanticSimilarity}%, renamed ${context.scores.variableRename}%. Use these as review signals, not a final verdict.`,
+  ];
+  return answers[variant];
+}
+
+function inferPromptIntent(prompt) {
+  const text = String(prompt || '').toLowerCase();
+  if (text.includes('final decision') || text.includes('decision') || text.includes('desisyon') || text.includes('approve') || text.includes('resubmit') || text.includes('hatol')) {
+    return 'decision';
+  }
+  if (text.includes('bantayan') || text.includes('suspicious') || text.includes('what should i review') || text.includes('ano dapat') || text.includes('tingnan')) {
+    return 'review';
+  }
+  if (text.includes('score') || text.includes('why') || text.includes('explain') || text.includes('bakit') || text.includes('paliwanag') || text.includes('0')) {
+    return 'score';
+  }
+  if (text.includes('highlight')) return 'highlights';
+  if (text.includes('variable') || text.includes('renamed')) return 'variables';
+  if (text.includes('note')) return 'notes';
+  return 'summary';
+}
+
+function normalizeRepeatText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function buildZeroSimilarityAnswer(prompt, context) {

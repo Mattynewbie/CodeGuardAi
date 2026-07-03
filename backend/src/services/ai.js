@@ -41,6 +41,10 @@ export function explainSimilarity(metrics, semanticScore) {
     reasons.push('files are nearly identical at the hash or normalized text level');
   }
 
+  if (metrics.nearDuplicateScore >= 0.92) {
+    reasons.push('the files are near-duplicates even though their raw hashes are not identical');
+  }
+
   if (metrics.fingerprintScore >= 0.72) {
     reasons.push('large token windows appear in both files');
   }

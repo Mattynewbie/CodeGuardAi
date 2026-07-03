@@ -214,6 +214,77 @@ test('adds block highlights for exact copied files without token-heavy lines', a
   assert.match(analysis.comparisons[0].matchedSections[0].sourceSnippet, /onehatBomber/);
 });
 
+test('keeps project score at 100 when an exact copied file has weaker nearby pairs', async () => {
+  const copiedText = `function clonedLogin(user, password) {
+    if (user && password_verify(password, user.password)) {
+      session.user = user.id;
+      return redirect('/dashboard');
+    }
+  }`;
+
+  const sourceExact = toSourceDocument({
+    projectId: 'submission-b',
+    ownerId: 'u',
+    filePath: 'src/cloned-login.js',
+    language: 'JavaScript',
+    sizeBytes: copiedText.length,
+    sha256: 'copied-login',
+    rawText: copiedText,
+  });
+
+  const sourceWeak = toSourceDocument({
+    projectId: 'submission-b',
+    ownerId: 'u',
+    filePath: 'src/cart-summary.js',
+    language: 'JavaScript',
+    sizeBytes: 100,
+    sha256: 'source-weak',
+    rawText: `function sum(items) {
+      let total = 0;
+      for (const item of items) {
+        total += item.price;
+      }
+      return total;
+    }`,
+  });
+
+  const previousExact = toSourceDocument({
+    projectId: 'submission-a',
+    projectTitle: 'Submission A',
+    ownerId: 'u',
+    filePath: 'archive/login-copy.js',
+    language: 'JavaScript',
+    sizeBytes: copiedText.length,
+    sha256: 'copied-login',
+    rawText: copiedText,
+  });
+
+  const previousWeak = toSourceDocument({
+    projectId: 'submission-a',
+    projectTitle: 'Submission A',
+    ownerId: 'u',
+    filePath: 'archive/cart-total.js',
+    language: 'JavaScript',
+    sizeBytes: 100,
+    sha256: 'previous-weak',
+    rawText: `function total(products) {
+      let amount = 0;
+      products.forEach((product) => {
+        amount += product.price;
+      });
+      return amount;
+    }`,
+  });
+
+  const analysis = await analyzeSubmission([sourceExact, sourceWeak], [previousExact, previousWeak], {
+    sourceSubmission: { id: 'submission-b', title: 'Submission B' },
+  });
+
+  assert.ok(analysis.comparisons[0].filePairs.length > 1);
+  assert.equal(analysis.comparisons[0].filePairs[0].score, 100);
+  assert.equal(analysis.projectScore, 100);
+});
+
 test('builds a low-deviation author fingerprint for consistent student style', () => {
   const studentName = 'James Matthew Dela Torre';
   const previous = withStudent(

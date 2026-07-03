@@ -875,9 +875,11 @@ export function compareDocuments(documentA, documentB) {
   const structureScore = structureSimilarity(documentA.structure, documentB.structure);
   const stringScore = normalizedStringSimilarity(documentA.normalizedText, documentB.normalizedText);
   const renamedVariableScore = Math.max(0, tokenScore - rawTokenScore);
+  const nearDuplicateScore = calculateNearDuplicateScore({ tokenScore, fingerprintScore, structureScore, stringScore });
 
   const combinedScore = Math.max(
     exactScore,
+    nearDuplicateScore,
     exactScore * 0.2 +
       fingerprintScore * 0.3 +
       tokenScore * 0.25 +
@@ -894,6 +896,7 @@ export function compareDocuments(documentA, documentB) {
     structureScore,
     stringScore,
     renamedVariableScore,
+    nearDuplicateScore,
     combinedScore,
   };
 }
@@ -903,6 +906,7 @@ function combineScores(metrics, semanticScore) {
 
   return Math.max(
     metrics.combinedScore,
+    metrics.nearDuplicateScore || 0,
     metrics.exactScore * 0.18 +
       metrics.fingerprintScore * 0.25 +
       metrics.tokenScore * 0.22 +
@@ -1028,6 +1032,22 @@ function structureSimilarity(structureA, structureB) {
 function closeness(a, b) {
   if (a === 0 && b === 0) return 1;
   return 1 - Math.abs(a - b) / Math.max(a, b, 1);
+}
+
+function calculateNearDuplicateScore({ tokenScore, fingerprintScore, structureScore, stringScore }) {
+  const strongTokenOverlap = tokenScore >= 0.9;
+  const strongTextOverlap = stringScore >= 0.88;
+  const strongWindowOverlap = fingerprintScore >= 0.72;
+
+  if (!strongTokenOverlap || (!strongTextOverlap && !strongWindowOverlap)) return 0;
+
+  const weightedScore =
+    tokenScore * 0.42 +
+    fingerprintScore * 0.28 +
+    structureScore * 0.15 +
+    stringScore * 0.15;
+
+  return Math.min(0.99, Math.max(weightedScore, tokenScore, stringScore));
 }
 
 function normalizedStringSimilarity(textA, textB) {
@@ -1248,9 +1268,10 @@ function dedupeRenameHints(hints) {
 function calculateProjectScore(sortedPairs) {
   if (!sortedPairs.length) return 0;
   const topFive = sortedPairs.slice(0, 5);
+  const strongestScore = Number(sortedPairs[0]?.score || 0);
   const average = topFive.reduce((total, pair) => total + pair.score, 0) / topFive.length;
   const repeatBonus = Math.min(8, Math.max(0, sortedPairs.length - 1) * 1.5);
-  return Math.min(100, Math.round(average + repeatBonus));
+  return Math.min(100, Math.round(Math.max(strongestScore, average + repeatBonus)));
 }
 
 function toPercentMetrics(metrics, semanticScore) {
@@ -1266,6 +1287,7 @@ function toPercentMetrics(metrics, semanticScore) {
 
 function classifyMatch(metrics, semanticScore) {
   if (metrics.exactScore >= 0.98) return 'Exact copied code';
+  if (metrics.nearDuplicateScore >= 0.92) return 'Near-identical copied code';
   if (metrics.renamedVariableScore >= 0.18 && metrics.tokenScore >= 0.7) {
     return 'Renamed variables, same logic';
   }
