@@ -4,6 +4,7 @@ import {
   analyzeAuthorFingerprint,
   analyzeSubmission,
   compareDocuments,
+  isCommonHtmlBoilerplateSnippet,
   toSourceDocument,
 } from '../src/services/analyzer.js';
 import { buildReport } from '../src/services/report.js';
@@ -363,6 +364,18 @@ test('ignores common HTML boilerplate as plagiarism evidence', async () => {
 
   assert.equal(report.summary, 'Only common HTML boilerplate was matched. No meaningful plagiarism evidence found.');
   assert.equal(report.boilerplateOnlyMatch, true);
+});
+
+test('identifies boilerplate snippets without hiding meaningful HTML', () => {
+  assert.equal(isCommonHtmlBoilerplateSnippet('<!DOCTYPE html>', { filePath: 'options.html' }), true);
+  assert.equal(isCommonHtmlBoilerplateSnippet('<html lang="en">', { filePath: 'options.html' }), true);
+  assert.equal(isCommonHtmlBoilerplateSnippet('<meta charset="UTF-8">', { filePath: 'options.html' }), true);
+  assert.equal(
+    isCommonHtmlBoilerplateSnippet('<section id="student-profile">Unique content</section>', {
+      filePath: 'options.html',
+    }),
+    false,
+  );
 });
 
 test('does not highlight boilerplate lines when meaningful HTML content matches', async () => {

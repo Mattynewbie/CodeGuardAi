@@ -1145,6 +1145,17 @@ function hasCommonHtmlBoilerplateOverlap(documentA, documentB) {
   return getCommonHtmlBoilerplateLines(documentB.rawText || documentB.normalizedText).some((line) => first.has(line));
 }
 
+export function isCommonHtmlBoilerplateSnippet(source, file = {}) {
+  if (!isHtmlLikeFile(file)) return false;
+
+  const lines = String(source || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return lines.length > 0 && lines.every((line) => isCommonHtmlBoilerplateLine(line));
+}
+
 function getCommonHtmlBoilerplateLines(source) {
   return String(source || '')
     .split(/\r?\n/)

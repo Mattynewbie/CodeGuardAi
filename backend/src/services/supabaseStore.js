@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config.js';
-import { compareDocuments, toSourceDocument } from './analyzer.js';
+import { compareDocuments, isCommonHtmlBoilerplateSnippet, toSourceDocument } from './analyzer.js';
 
 const supabase =
   config.supabaseUrl && config.supabaseServiceRoleKey
@@ -12,6 +12,7 @@ const supabase =
       })
     : null;
 const sourceTextDecoder = new TextDecoder('utf-8', { fatal: false });
+const htmlBoilerplateOnlySummary = 'Only common HTML boilerplate was matched. No meaningful plagiarism evidence found.';
 
 export const isSupabaseConfigured = Boolean(supabase);
 
@@ -731,13 +732,39 @@ async function fetchReportRowByColumn(column, value, { user, isAdmin }) {
 async function enrichReportEvidence(report) {
   if (!report || report.waiting) return report;
   if (Array.isArray(report.matchedSections) && report.matchedSections.length > 0) {
-    return recalibrateReportFromMatchedSections(await repairNormalizedMatchedSections(report));
+    const repaired = await repairNormalizedMatchedSections(report);
+    const filtered = filterBoilerplateOnlyMatchedSections(repaired);
+    if (filtered.matchedSections?.length) return recalibrateReportFromMatchedSections(filtered);
+
+    const rebuiltSections = await buildEvidenceSectionsFromPairs(report);
+    if (rebuiltSections.length) {
+      return recalibrateReportFromMatchedSections({
+        ...filtered,
+        matchedSections: rebuiltSections,
+      });
+    }
+
+    return markBoilerplateOnlyReport(filtered);
   }
   if (!Array.isArray(report.filePairs) || report.filePairs.length === 0) return report;
 
-  const sections = [];
+  const sections = await buildEvidenceSectionsFromPairs(report);
+  if (!sections.length) return report;
 
-  for (const pair of report.filePairs.slice(0, 6)) {
+  const filtered = filterBoilerplateOnlyMatchedSections({
+    ...report,
+    matchedSections: sections,
+  });
+
+  if (!filtered.matchedSections?.length) return markBoilerplateOnlyReport(filtered);
+  return recalibrateReportFromMatchedSections(filtered);
+}
+
+async function buildEvidenceSectionsFromPairs(report) {
+  const sections = [];
+  const pairs = Array.isArray(report.filePairs) ? report.filePairs : [];
+
+  for (const pair of pairs.slice(0, 6)) {
     const evidence = await loadEvidenceDocumentsForPair(report, pair);
     if (!evidence?.source || !evidence?.compared) continue;
 
@@ -759,18 +786,14 @@ async function enrichReportEvidence(report) {
     });
   }
 
-  if (!sections.length) return report;
-  return recalibrateReportFromMatchedSections({
-    ...report,
-    matchedSections: sections,
-  });
+  return sections;
 }
 
 async function loadEvidenceDocumentsForPair(report, pair) {
   if (pair.sourceId && pair.comparedId) {
     const { data, error } = await supabase
       .from('extracted_code_files')
-      .select('id, project_id, file_path, normalized_code, metrics, uploaded_files(storage_path, archive_type, original_name)')
+      .select('id, project_id, file_path, language, normalized_code, metrics, uploaded_files(storage_path, archive_type, original_name)')
       .in('id', [pair.sourceId, pair.comparedId]);
 
     if (error) throw error;
@@ -801,7 +824,7 @@ async function loadEvidenceDocumentsForPair(report, pair) {
 async function loadEvidenceDocumentByPath(projectId, filePath) {
   const { data, error } = await supabase
     .from('extracted_code_files')
-    .select('id, project_id, file_path, normalized_code, metrics, uploaded_files(storage_path, archive_type, original_name)')
+    .select('id, project_id, file_path, language, normalized_code, metrics, uploaded_files(storage_path, archive_type, original_name)')
     .eq('project_id', projectId)
     .eq('file_path', filePath)
     .maybeSingle();
@@ -849,6 +872,71 @@ async function repairNormalizedMatchedSections(report) {
     ...report,
     matchedSections: repairedSections,
   };
+}
+
+function filterBoilerplateOnlyMatchedSections(report) {
+  const sections = Array.isArray(report.matchedSections) ? report.matchedSections : [];
+  if (!sections.length) return report;
+
+  const filteredSections = sections.filter((section) => !isBoilerplateOnlyMatchedSection(section));
+  if (filteredSections.length === sections.length) return report;
+
+  return {
+    ...report,
+    boilerplateOnlyMatch: filteredSections.length === 0 || Boolean(report.boilerplateOnlyMatch),
+    matchedSections: filteredSections,
+  };
+}
+
+function isBoilerplateOnlyMatchedSection(section = {}) {
+  return (
+    isCommonHtmlBoilerplateSnippet(section.sourceSnippet, {
+      filePath: section.sourceFile,
+      language: 'HTML',
+    }) &&
+    isCommonHtmlBoilerplateSnippet(section.comparedSnippet, {
+      filePath: section.comparedFile,
+      language: 'HTML',
+    })
+  );
+}
+
+function markBoilerplateOnlyReport(report) {
+  return {
+    ...report,
+    similarityScore: 0,
+    exactMatchScore: 0,
+    tokenSimilarityScore: 0,
+    structuralSimilarityScore: 0,
+    semanticSimilarityScore: 0,
+    fingerprintSimilarityScore: 0,
+    variableRenameScore: 0,
+    variableRenameDetection: {
+      detected: false,
+      score: 0,
+    },
+    boilerplateOnlyMatch: true,
+    summary: htmlBoilerplateOnlySummary,
+    chartData: zeroReportChartData(report.chartData),
+    filePairs: [],
+    matchedSections: [],
+    renamedVariables: [],
+  };
+}
+
+function zeroReportChartData(chartData = []) {
+  const defaultChartData = [
+    { name: 'Exact', value: 0 },
+    { name: 'Structure', value: 0 },
+    { name: 'Semantic', value: 0 },
+    { name: 'Renamed', value: 0 },
+  ];
+
+  if (!Array.isArray(chartData) || chartData.length === 0) return defaultChartData;
+  return chartData.map((item) => ({
+    ...item,
+    value: 0,
+  }));
 }
 
 function recalibrateReportFromMatchedSections(report) {
@@ -997,12 +1085,29 @@ async function storedSnippetBlock(row) {
   if (!text) return null;
 
   const sourceLines = text.includes('\n') ? text.split(/\r?\n/) : wrapText(text, 74);
-  const lines = sourceLines.map((line) => line.trim()).filter(Boolean).slice(0, 12);
-  if (!lines.length) return null;
+  const entries = sourceLines
+    .map((line, index) => ({
+      lineNumber: index + 1,
+      text: line.trim(),
+    }))
+    .filter((line) => line.text)
+    .filter(
+      (line) =>
+        !isCommonHtmlBoilerplateSnippet(line.text, {
+          filePath: row?.file_path,
+          language: row?.language,
+        }),
+    )
+    .slice(0, 12);
+
+  if (!entries.length) return null;
+
+  const firstLine = entries[0].lineNumber;
+  const lastLine = entries[entries.length - 1].lineNumber;
 
   return {
-    lines: `1-${lines.length}`,
-    snippet: lines.join('\n'),
+    lines: `${firstLine}-${lastLine}`,
+    snippet: entries.map((line) => line.text).join('\n'),
   };
 }
 
