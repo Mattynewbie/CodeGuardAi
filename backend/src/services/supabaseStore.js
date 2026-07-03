@@ -313,6 +313,7 @@ export async function persistAnalysis({ user, uploadedFile, sourceDocuments, sou
     metrics: {
       tokenCount: document.normalizedTokens.length,
       identifierCount: document.identifiers.length,
+      rawCode: document.rawText.slice(0, 150000),
       structure: document.structure,
       styleFingerprint: document.styleFingerprint,
     },
@@ -727,7 +728,9 @@ async function fetchReportRowByColumn(column, value, { user, isAdmin }) {
 
 async function enrichReportEvidence(report) {
   if (!report || report.waiting) return report;
-  if (Array.isArray(report.matchedSections) && report.matchedSections.length > 0) return report;
+  if (Array.isArray(report.matchedSections) && report.matchedSections.length > 0) {
+    return repairNormalizedMatchedSections(report);
+  }
   if (!Array.isArray(report.filePairs) || report.filePairs.length === 0) return report;
 
   const sections = [];
@@ -736,8 +739,8 @@ async function enrichReportEvidence(report) {
     const evidence = await loadEvidenceDocumentsForPair(report, pair);
     if (!evidence?.source || !evidence?.compared) continue;
 
-    const sourceBlock = storedSnippetBlock(evidence.source.normalized_code);
-    const comparedBlock = storedSnippetBlock(evidence.compared.normalized_code);
+    const sourceBlock = storedSnippetBlock(evidence.source);
+    const comparedBlock = storedSnippetBlock(evidence.compared);
     if (!sourceBlock || !comparedBlock) continue;
 
     sections.push({
@@ -765,7 +768,7 @@ async function loadEvidenceDocumentsForPair(report, pair) {
   if (pair.sourceId && pair.comparedId) {
     const { data, error } = await supabase
       .from('extracted_code_files')
-      .select('id, project_id, file_path, normalized_code')
+      .select('id, project_id, file_path, normalized_code, metrics')
       .in('id', [pair.sourceId, pair.comparedId]);
 
     if (error) throw error;
@@ -796,7 +799,7 @@ async function loadEvidenceDocumentsForPair(report, pair) {
 async function loadEvidenceDocumentByPath(projectId, filePath) {
   const { data, error } = await supabase
     .from('extracted_code_files')
-    .select('id, project_id, file_path, normalized_code')
+    .select('id, project_id, file_path, normalized_code, metrics')
     .eq('project_id', projectId)
     .eq('file_path', filePath)
     .maybeSingle();
@@ -805,8 +808,73 @@ async function loadEvidenceDocumentByPath(projectId, filePath) {
   return data;
 }
 
-function storedSnippetBlock(normalizedCode) {
-  const text = String(normalizedCode || '').trim();
+async function repairNormalizedMatchedSections(report) {
+  if (!hasNormalizedSnippetText(report.matchedSections)) return report;
+  if (!Array.isArray(report.filePairs) || report.filePairs.length === 0) return report;
+
+  const repairedSections = [];
+
+  for (const section of report.matchedSections) {
+    const pair = findPairForMatchedSection(report.filePairs, section);
+    if (!pair) {
+      repairedSections.push(section);
+      continue;
+    }
+
+    const evidence = await loadEvidenceDocumentsForPair(report, pair);
+    if (!evidence?.source || !evidence?.compared) {
+      repairedSections.push(section);
+      continue;
+    }
+
+    const sourceBlock = storedSnippetBlock(evidence.source);
+    const comparedBlock = storedSnippetBlock(evidence.compared);
+    if (!sourceBlock || !comparedBlock) {
+      repairedSections.push(section);
+      continue;
+    }
+
+    repairedSections.push({
+      ...section,
+      sourceSnippet: looksLikeNormalizedTokens(section.sourceSnippet) ? sourceBlock.snippet : section.sourceSnippet,
+      comparedSnippet: looksLikeNormalizedTokens(section.comparedSnippet) ? comparedBlock.snippet : section.comparedSnippet,
+      sourceLines: section.sourceLines || sourceBlock.lines,
+      comparedLines: section.comparedLines || comparedBlock.lines,
+    });
+  }
+
+  return {
+    ...report,
+    matchedSections: repairedSections,
+  };
+}
+
+function findPairForMatchedSection(filePairs = [], section = {}) {
+  return filePairs.find(
+    (pair) =>
+      (pair.sourceId && pair.sourceId === section.sourceFileId && pair.comparedId === section.comparedFileId) ||
+      (pair.source === section.sourceFile && pair.compared === section.comparedFile),
+  );
+}
+
+function hasNormalizedSnippetText(sections = []) {
+  return sections.some(
+    (section) =>
+      looksLikeNormalizedTokens(section.sourceSnippet) ||
+      looksLikeNormalizedTokens(section.comparedSnippet),
+  );
+}
+
+function looksLikeNormalizedTokens(value) {
+  const text = String(value || '');
+  if (!text) return false;
+  const identifierTokens = text.match(/\bID\d+\b/g) || [];
+  const numberTokens = text.match(/\bNUM\b/g) || [];
+  return identifierTokens.length >= 3 || (identifierTokens.length >= 1 && numberTokens.length >= 1);
+}
+
+function storedSnippetBlock(row) {
+  const text = String(row?.metrics?.rawCode || row?.normalized_code || '').trim();
   if (!text) return null;
 
   const sourceLines = text.includes('\n') ? text.split(/\r?\n/) : wrapText(text, 74);
@@ -1551,6 +1619,7 @@ function hydrateStoredDocument(row) {
   const normalizedTokens = row.normalized_code.split(/\s+/).filter(Boolean);
   const fingerprints = new Set(Array.isArray(row.fingerprint_hashes) ? row.fingerprint_hashes : []);
   const metadata = parseSubmissionMetadata(row.projects?.description);
+  const rawCode = row.metrics?.rawCode || row.normalized_code;
 
   return {
     id: row.id,
@@ -1562,7 +1631,7 @@ function hydrateStoredDocument(row) {
     submittedAt: row.projects?.created_at,
     filePath: row.file_path,
     language: row.language,
-    rawText: row.normalized_code,
+    rawText: rawCode,
     sizeBytes: row.size_bytes,
     contentSha256: row.content_sha256,
     normalizedSha256: row.normalized_sha256,
