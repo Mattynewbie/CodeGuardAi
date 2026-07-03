@@ -37,12 +37,20 @@ export function getAiRuntimeInfo() {
 export function explainSimilarity(metrics, semanticScore) {
   const reasons = [];
 
+  if (metrics.exactFullContentScore >= 0.98 || metrics.exactLineScore >= 0.98) {
+    reasons.push('the files are an exact full-file match after normalizing line endings and trailing spaces');
+  }
+
   if (metrics.exactScore >= 0.98) {
     reasons.push('files are nearly identical at the hash or normalized text level');
   }
 
   if (metrics.nearDuplicateScore >= 0.92) {
     reasons.push('the files are near-duplicates even though their raw hashes are not identical');
+  }
+
+  if (metrics.shortFileBoostScore >= 0.9) {
+    reasons.push('this is a short file where token-level overlap is very high, so the final score is protected from low structural or semantic weighting');
   }
 
   if (metrics.fingerprintScore >= 0.72) {

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config.js';
+import { compareDocuments, toSourceDocument } from './analyzer.js';
 
 const supabase =
   config.supabaseUrl && config.supabaseServiceRoleKey
@@ -730,7 +731,7 @@ async function fetchReportRowByColumn(column, value, { user, isAdmin }) {
 async function enrichReportEvidence(report) {
   if (!report || report.waiting) return report;
   if (Array.isArray(report.matchedSections) && report.matchedSections.length > 0) {
-    return repairNormalizedMatchedSections(report);
+    return recalibrateReportFromMatchedSections(await repairNormalizedMatchedSections(report));
   }
   if (!Array.isArray(report.filePairs) || report.filePairs.length === 0) return report;
 
@@ -759,10 +760,10 @@ async function enrichReportEvidence(report) {
   }
 
   if (!sections.length) return report;
-  return {
+  return recalibrateReportFromMatchedSections({
     ...report,
     matchedSections: sections,
-  };
+  });
 }
 
 async function loadEvidenceDocumentsForPair(report, pair) {
@@ -848,6 +849,123 @@ async function repairNormalizedMatchedSections(report) {
     ...report,
     matchedSections: repairedSections,
   };
+}
+
+function recalibrateReportFromMatchedSections(report) {
+  const section = (report.matchedSections || []).find((item) => item.sourceSnippet && item.comparedSnippet);
+  if (!section) return report;
+
+  const sourceDocument = snippetToSourceDocument({
+    projectId: report.sourceSubmissionId || report.projectId || 'source',
+    filePath: section.sourceFile || 'source.txt',
+    rawText: section.sourceSnippet,
+  });
+  const comparedDocument = snippetToSourceDocument({
+    projectId: report.comparedSubmissionId || 'compared',
+    filePath: section.comparedFile || 'compared.txt',
+    rawText: section.comparedSnippet,
+  });
+  const metrics = compareDocuments(sourceDocument, comparedDocument);
+  const recalibratedScore = Math.round(metrics.combinedScore * 100);
+  const currentScore = Number(report.similarityScore || 0);
+
+  if (!Number.isFinite(recalibratedScore) || recalibratedScore <= currentScore) return report;
+
+  const metricPercentages = reportPercentMetrics(metrics, report);
+  const updatedFilePairs = Array.isArray(report.filePairs)
+    ? report.filePairs.map((pair, index) =>
+        index === 0 || (pair.source === section.sourceFile && pair.compared === section.comparedFile)
+          ? {
+              ...pair,
+              score: Math.max(Number(pair.score || 0), recalibratedScore),
+              metrics: {
+                ...(pair.metrics || {}),
+                ...metricPercentages,
+              },
+              matchType: reportMatchTypeFromMetrics(metrics, pair.matchType),
+              explanation:
+                metrics.exactFullContentScore >= 0.98 || metrics.exactLineScore >= 0.98
+                  ? 'The recovered source snippets are an exact full-file match after normalizing line endings and trailing spaces.'
+                  : pair.explanation,
+            }
+          : pair,
+      )
+    : report.filePairs;
+
+  return {
+    ...report,
+    similarityScore: recalibratedScore,
+    exactMatchScore: Math.max(Number(report.exactMatchScore || 0), metricPercentages.exact),
+    tokenSimilarityScore: Math.max(Number(report.tokenSimilarityScore || 0), metricPercentages.tokens),
+    structuralSimilarityScore: Math.max(Number(report.structuralSimilarityScore || 0), metricPercentages.structure),
+    fingerprintSimilarityScore: Math.max(Number(report.fingerprintSimilarityScore || 0), metricPercentages.fingerprint),
+    variableRenameScore: Math.max(Number(report.variableRenameScore || 0), metricPercentages.renamedVariables),
+    summary: buildRecalibratedSummary(report, recalibratedScore),
+    chartData: updateReportChartData(report.chartData, metricPercentages),
+    filePairs: updatedFilePairs,
+    matchedSections: report.matchedSections.map((item) =>
+      item === section ? { ...item, confidence: Math.max(Number(item.confidence || 0), recalibratedScore) } : item,
+    ),
+  };
+}
+
+function snippetToSourceDocument({ projectId, filePath, rawText }) {
+  return toSourceDocument({
+    projectId,
+    ownerId: 'report-evidence',
+    filePath,
+    language: path.extname(filePath).slice(1).toUpperCase() || 'Text',
+    sizeBytes: Buffer.byteLength(String(rawText || ''), 'utf8'),
+    sha256: sha256(rawText || ''),
+    rawText,
+  });
+}
+
+function reportPercentMetrics(metrics, report) {
+  return {
+    exact: Math.round(metrics.exactScore * 100),
+    tokens: Math.round(metrics.tokenScore * 100),
+    structure: Math.round(metrics.structureScore * 100),
+    fingerprint: Math.round(metrics.fingerprintScore * 100),
+    renamedVariables: Math.round(metrics.renamedVariableScore * 100),
+    semantic: Number(report.semanticSimilarityScore || chartValue(report.chartData, 'Semantic') || 0),
+  };
+}
+
+function reportMatchTypeFromMetrics(metrics, fallback = 'Similarity evidence') {
+  if (metrics.exactFullContentScore >= 0.98 || metrics.exactLineScore >= 0.98) return 'Exact full-file match';
+  if (metrics.exactScore >= 0.98) return 'Exact copied code';
+  if (metrics.nearDuplicateScore >= 0.92) return 'Near-identical copied code';
+  if (metrics.shortFileBoostScore >= 0.9) return 'Short-file high token match';
+  return fallback;
+}
+
+function updateReportChartData(chartData = [], metrics) {
+  const values = {
+    Exact: metrics.exact,
+    Structure: metrics.structure,
+    Semantic: metrics.semantic,
+    Renamed: metrics.renamedVariables,
+  };
+  const existing = Array.isArray(chartData) && chartData.length ? chartData : Object.keys(values).map((name) => ({ name, value: 0 }));
+  return existing.map((item) => ({
+    ...item,
+    value: Math.max(Number(item.value || 0), Number(values[item.name] || 0)),
+  }));
+}
+
+function buildRecalibratedSummary(report, score) {
+  if (score >= 100) {
+    return `${report.projectTitle || 'This comparison'} is an exact full-file match after normalizing line endings and trailing spaces.`;
+  }
+  if (score >= 90) {
+    return `${report.projectTitle || 'This comparison'} has very high short-file token overlap. Review the recovered code snippets manually before making a decision.`;
+  }
+  return report.summary;
+}
+
+function chartValue(chartData = [], name) {
+  return chartData.find((item) => item.name === name)?.value;
 }
 
 function findPairForMatchedSection(filePairs = [], section = {}) {

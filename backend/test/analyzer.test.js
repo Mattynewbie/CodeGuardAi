@@ -214,6 +214,98 @@ test('adds block highlights for exact copied files without token-heavy lines', a
   assert.match(analysis.comparisons[0].matchedSections[0].sourceSnippet, /onehatBomber/);
 });
 
+test('returns 100 for exact full-file HTML match after whitespace normalization', async () => {
+  const html = `<html>
+<title>introduction</title>
+<body>
+<br>name: lemon, Julius Michael A.
+<br>gr/section: 11- STEM 2P
+<br>age: 19 yrs old
+<br>birthday: february 9, 2005
+</body>
+</html>`;
+  const htmlWithWindowsLines = `${html.replaceAll('\n', '  \r\n')}\r\n`;
+
+  const source = toSourceDocument({
+    projectId: 'submission-b',
+    ownerId: 'u',
+    filePath: 'lemon.html',
+    language: 'HTML',
+    sizeBytes: html.length,
+    sha256: 'html-source-different-hash',
+    rawText: htmlWithWindowsLines,
+  });
+
+  const previous = toSourceDocument({
+    projectId: 'submission-a',
+    projectTitle: 'Submission A',
+    ownerId: 'u',
+    filePath: 'lemon.html',
+    language: 'HTML',
+    sizeBytes: html.length,
+    sha256: 'html-previous-different-hash',
+    rawText: html,
+  });
+
+  const metrics = compareDocuments(source, previous);
+  assert.equal(metrics.exactFullContentScore, 1);
+  assert.equal(metrics.combinedScore, 1);
+
+  const analysis = await analyzeSubmission([source], [previous], {
+    sourceSubmission: { id: 'submission-b', title: 'Submission B' },
+  });
+
+  assert.equal(analysis.projectScore, 100);
+  assert.equal(analysis.comparisons[0].filePairs[0].score, 100);
+  assert.equal(analysis.comparisons[0].filePairs[0].matchType, 'Exact full-file match');
+});
+
+test('prioritizes high token overlap for very short HTML files', () => {
+  const styledHtml = `<html>
+<title>introduction</title>
+<body style="color:brown;font-size:209%;font-family:cooper;">
+<br>name: lemon, Julius Michael A.
+<br>gr/section: 11- STEM 2P
+<br>age: 19 yrs old
+<br>birthday: february 9, 2005
+</body>
+</html>`;
+  const plainHtml = `<html>
+<title>introduction</title>
+<body>
+<br>name: lemon, Julius Michael A.
+<br>gr/section: 11- STEM 2P
+<br>age: 19 yrs old
+<br>birthday: february 9, 2005
+</body>
+</html>`;
+
+  const first = toSourceDocument({
+    projectId: 'a',
+    ownerId: 'u',
+    filePath: 'lemon.html',
+    language: 'HTML',
+    sizeBytes: styledHtml.length,
+    sha256: 'styled-html',
+    rawText: styledHtml,
+  });
+  const second = toSourceDocument({
+    projectId: 'b',
+    ownerId: 'u',
+    filePath: 'lemon.html',
+    language: 'HTML',
+    sizeBytes: plainHtml.length,
+    sha256: 'plain-html',
+    rawText: plainHtml,
+  });
+
+  const metrics = compareDocuments(first, second);
+
+  assert.ok(metrics.tokenScore > 0.9);
+  assert.ok(metrics.combinedScore > 0.9);
+  assert.equal(metrics.exactFullContentScore, 0);
+});
+
 test('keeps project score at 100 when an exact copied file has weaker nearby pairs', async () => {
   const copiedText = `function clonedLogin(user, password) {
     if (user && password_verify(password, user.password)) {

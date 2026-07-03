@@ -864,6 +864,12 @@ function aggregatePairMetrics(filePairs) {
 }
 
 export function compareDocuments(documentA, documentB) {
+  const exactFullContentScore = exactFullContentMatch(documentA, documentB) ? 1 : 0;
+  const exactLineScore = exactLineMatch(documentA, documentB) ? 1 : 0;
+  if (exactFullContentScore || exactLineScore) {
+    return makeExactDocumentMetrics({ exactFullContentScore, exactLineScore });
+  }
+
   const exactScore =
     documentA.contentSha256 === documentB.contentSha256 ||
     documentA.normalizedSha256 === documentB.normalizedSha256
@@ -876,10 +882,18 @@ export function compareDocuments(documentA, documentB) {
   const stringScore = normalizedStringSimilarity(documentA.normalizedText, documentB.normalizedText);
   const renamedVariableScore = Math.max(0, tokenScore - rawTokenScore);
   const nearDuplicateScore = calculateNearDuplicateScore({ tokenScore, fingerprintScore, structureScore, stringScore });
+  const shortFileBoostScore = calculateShortFileBoostScore({
+    documentA,
+    documentB,
+    tokenScore,
+    rawTokenScore,
+    stringScore,
+  });
 
   const combinedScore = Math.max(
     exactScore,
     nearDuplicateScore,
+    shortFileBoostScore,
     exactScore * 0.2 +
       fingerprintScore * 0.3 +
       tokenScore * 0.25 +
@@ -890,6 +904,8 @@ export function compareDocuments(documentA, documentB) {
 
   return {
     exactScore,
+    exactFullContentScore,
+    exactLineScore,
     rawTokenScore,
     tokenScore,
     fingerprintScore,
@@ -897,6 +913,7 @@ export function compareDocuments(documentA, documentB) {
     stringScore,
     renamedVariableScore,
     nearDuplicateScore,
+    shortFileBoostScore,
     combinedScore,
   };
 }
@@ -907,6 +924,7 @@ function combineScores(metrics, semanticScore) {
   return Math.max(
     metrics.combinedScore,
     metrics.nearDuplicateScore || 0,
+    metrics.shortFileBoostScore || 0,
     metrics.exactScore * 0.18 +
       metrics.fingerprintScore * 0.25 +
       metrics.tokenScore * 0.22 +
@@ -1034,6 +1052,54 @@ function closeness(a, b) {
   return 1 - Math.abs(a - b) / Math.max(a, b, 1);
 }
 
+function makeExactDocumentMetrics({ exactFullContentScore = 1, exactLineScore = 1 } = {}) {
+  return {
+    exactScore: 1,
+    exactFullContentScore,
+    exactLineScore,
+    rawTokenScore: 1,
+    tokenScore: 1,
+    fingerprintScore: 1,
+    structureScore: 1,
+    stringScore: 1,
+    renamedVariableScore: 0,
+    nearDuplicateScore: 1,
+    shortFileBoostScore: 1,
+    combinedScore: 1,
+  };
+}
+
+function exactFullContentMatch(documentA, documentB) {
+  const first = normalizeFullContent(documentA.rawText || documentA.normalizedText);
+  const second = normalizeFullContent(documentB.rawText || documentB.normalizedText);
+  return Boolean(first && second && first === second);
+}
+
+function exactLineMatch(documentA, documentB) {
+  const first = normalizeComparableLines(documentA.rawText || documentA.normalizedText);
+  const second = normalizeComparableLines(documentB.rawText || documentB.normalizedText);
+  if (!first.length || first.length !== second.length) return false;
+  return first.every((line, index) => line === second[index]);
+}
+
+function normalizeFullContent(source) {
+  return String(source || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .trim();
+}
+
+function normalizeComparableLines(source) {
+  const text = normalizeFullContent(source);
+  if (!text) return [];
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function calculateNearDuplicateScore({ tokenScore, fingerprintScore, structureScore, stringScore }) {
   const strongTokenOverlap = tokenScore >= 0.9;
   const strongTextOverlap = stringScore >= 0.88;
@@ -1048,6 +1114,18 @@ function calculateNearDuplicateScore({ tokenScore, fingerprintScore, structureSc
     stringScore * 0.15;
 
   return Math.min(0.99, Math.max(weightedScore, tokenScore, stringScore));
+}
+
+function calculateShortFileBoostScore({ documentA, documentB, tokenScore, rawTokenScore, stringScore }) {
+  const lineCount = Math.max(
+    normalizeComparableLines(documentA.rawText || documentA.normalizedText).length,
+    normalizeComparableLines(documentB.rawText || documentB.normalizedText).length,
+  );
+
+  if (!lineCount || lineCount > 20) return 0;
+  if (tokenScore >= 0.9) return Math.min(0.99, Math.max(tokenScore, rawTokenScore * 0.98, stringScore));
+  if (tokenScore >= 0.82 && rawTokenScore >= 0.82) return Math.min(0.92, Math.max(tokenScore, rawTokenScore) * 0.96);
+  return 0;
 }
 
 function normalizedStringSimilarity(textA, textB) {
@@ -1286,8 +1364,10 @@ function toPercentMetrics(metrics, semanticScore) {
 }
 
 function classifyMatch(metrics, semanticScore) {
+  if (metrics.exactFullContentScore >= 0.98 || metrics.exactLineScore >= 0.98) return 'Exact full-file match';
   if (metrics.exactScore >= 0.98) return 'Exact copied code';
   if (metrics.nearDuplicateScore >= 0.92) return 'Near-identical copied code';
+  if (metrics.shortFileBoostScore >= 0.9) return 'Short-file high token match';
   if (metrics.renamedVariableScore >= 0.18 && metrics.tokenScore >= 0.7) {
     return 'Renamed variables, same logic';
   }
